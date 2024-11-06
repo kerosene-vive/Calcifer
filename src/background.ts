@@ -2,6 +2,10 @@ import { ExtensionServiceWorkerMLCEngineHandler } from "@mlc-ai/web-llm";
 
 // Hookup an engine to a service worker handler
 let handler;
+chrome.sidePanel
+  .setPanelBehavior({ openPanelOnActionClick: true })
+  .catch((error) => console.error(error));
+
 
 chrome.runtime.onConnect.addListener(function (port) {
   console.assert(port.name === "web_llm_service_worker");

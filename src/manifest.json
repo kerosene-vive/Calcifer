@@ -12,6 +12,9 @@
   "content_security_policy": {
     "extension_pages": "style-src-elem 'self' https://cdnjs.cloudflare.com; font-src 'self' https://cdnjs.cloudflare.com; script-src 'self' 'wasm-unsafe-eval'; default-src 'self' data:; connect-src 'self' data: http://localhost:8000 https://huggingface.co https://cdn-lfs.huggingface.co https://cdn-lfs-us-1.huggingface.co https://raw.githubusercontent.com https://cdn-lfs-us-1.hf.co"
   },
+  "side_panel": {
+    "default_path": "popup.html"
+  },
   "action": {
     "default_title": "MLCBot",
     "default_popup": "popup.html"
@@ -26,5 +29,5 @@
     "service_worker": "background.ts",
     "type": "module"
   },
-  "permissions": ["storage", "tabs", "webNavigation"]
+  "permissions": ["storage", "tabs", "webNavigation",  "scripting", "sidePanel" ]
 }
