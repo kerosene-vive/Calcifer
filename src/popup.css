@@ -39,6 +39,7 @@ body {
 
 .message-wrapper {
   width: 100%;
+  display: none;
 }
 
 .message {
