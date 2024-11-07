@@ -4,14 +4,12 @@
 // https://github.com/jessedi0n/openai-chatgpt-chrome-extension
 
 import "./popup.css";
-
 import {
   ChatCompletionMessageParam,
   CreateExtensionServiceWorkerMLCEngine,
   MLCEngineInterface,
   InitProgressReport,
 } from "@mlc-ai/web-llm";
-import { ProgressBar, Line } from "progressbar.js";
 
 /***************** UI elements *****************/
 // Whether or not to use the content from the active tab as the context
@@ -22,28 +20,138 @@ const queryInput = document.getElementById("query-input")!;
 const submitButton = document.getElementById("submit-button")!;
 
 let isLoadingParams = false;
+let isFirstLoad = true;
 
 (<HTMLButtonElement>submitButton).disabled = true;
 
-const progressBar: ProgressBar = new Line("#loadingContainer", {
-  strokeWidth: 4,
-  easing: "easeInOut",
-  duration: 1400,
-  color: "#ffd166",
-  trailColor: "#eee",
-  trailWidth: 1,
-  svgStyle: { width: "100%", height: "100%" },
-});
+// Create loading UI elements
+function createLoadingUI(container: HTMLElement, isFirstTime: boolean) {
+  container.innerHTML = `
+    <div class="loading-progress">
+      ${isFirstTime ? `
+        <div class="alert">
+          <h3>First-time Setup</h3>
+          <p>Downloading model files. This may take a few minutes.</p>
+        </div>
+      ` : `
+        <div class="init-message">
+          <span>⚙️ Initializing model...</span>
+        </div>
+      `}
+      
+      <div class="progress-stats">
+        <div class="progress-text">
+          <span id="progress-percentage">0%</span>
+          <span id="progress-status">${isFirstTime ? 'Downloading...' : 'Loading...'}</span>
+        </div>
+      </div>
+      
+      <div class="progress-bar">
+        <div id="progress-fill"></div>
+      </div>
+      
+      ${isFirstTime ? `
+        <p class="progress-note">This is a one-time download. Future startups will be much faster.</p>
+      ` : ''}
+    </div>
+  `;
+}
 
 /***************** Web-LLM MLCEngine Configuration *****************/
+let lastProgress = 0;
+const ANIMATION_DURATION = 500; // ms
+
 const initProgressCallback = (report: InitProgressReport) => {
-  progressBar.animate(report.progress, {
-    duration: 50,
+  chrome.storage.local.get(['modelDownloaded'], function(result) {
+    if (result.modelDownloaded) {
+      isFirstLoad = false;
+    } else {
+      chrome.storage.local.set({ modelDownloaded: true });
+    }
+    
+    const progressElement = document.getElementById('loadingContainer');
+    if (progressElement) {
+      if (!progressElement.hasChildNodes()) {
+        createLoadingUI(progressElement, isFirstLoad);
+      }
+      
+      // Smoothly interpolate progress
+      const progress = report.progress;
+      const progressPercent = Math.round(progress * 100);
+      
+      // Animate from last progress to new progress
+      const progressFill = document.getElementById('progress-fill');
+      if (progressFill) {
+        const start = lastProgress;
+        const end = progressPercent;
+        const duration = 300; // ms
+        const startTime = performance.now();
+        
+        const animateProgress = (currentTime: number) => {
+          const elapsed = currentTime - startTime;
+          const progress = Math.min(elapsed / duration, 1);
+          
+          // Use easeOutCubic easing function for smooth progression
+          const easeProgress = 1 - Math.pow(1 - progress, 3);
+          const currentProgress = start + (end - start) * easeProgress;
+          
+          progressFill.style.width = `${currentProgress}%`;
+          
+          // Update text displays
+          const percentageText = document.getElementById('progress-percentage');
+          const statusText = document.getElementById('progress-status');
+          
+          if (percentageText) {
+            percentageText.textContent = `${Math.round(currentProgress)}%`;
+          }
+          
+          if (statusText) {
+            if (currentProgress === 100) {
+              statusText.textContent = 'Complete!';
+            } else if (isFirstLoad) {
+              statusText.textContent = 'Downloading...';
+            } else {
+              statusText.textContent = 'Loading...';
+            }
+          }
+          
+          if (progress < 1) {
+            requestAnimationFrame(animateProgress);
+          }
+        };
+        
+        requestAnimationFrame(animateProgress);
+        lastProgress = progressPercent;
+      }
+    }
   });
-  if (report.progress == 1.0) {
-    enableInputs();
+
+  if (report.progress >= 1.0) {
+    const loadingProgress = document.querySelector('.loading-progress');
+    if (loadingProgress) {
+      loadingProgress.classList.add('fade-out');
+      
+      setTimeout(() => {
+        const loadingContainer = document.getElementById('loadingContainer');
+        if (loadingContainer) {
+          loadingContainer.classList.add('removing');
+          setTimeout(() => {
+            loadingContainer.remove();
+          }, ANIMATION_DURATION);
+        }
+        enableInputs();
+      }, ANIMATION_DURATION);
+    }
   }
 };
+
+function enableInputs() {
+  if (isLoadingParams) {
+    (<HTMLButtonElement>submitButton).disabled = false;
+    queryInput.focus();
+    isLoadingParams = false;
+  }
+}
 
 const engine: MLCEngineInterface = await CreateExtensionServiceWorkerMLCEngine(
   "Qwen2-0.5B-Instruct-q4f16_1-MLC",
@@ -53,16 +161,7 @@ const chatHistory: ChatCompletionMessageParam[] = [];
 
 isLoadingParams = true;
 
-function enableInputs() {
-  if (isLoadingParams) {
-    sleep(500);
-    (<HTMLButtonElement>submitButton).disabled = false;
-    const loadingBarContainer = document.getElementById("loadingContainer")!;
-    loadingBarContainer.remove();
-    queryInput.focus();
-    isLoadingParams = false;
-  }
-}
+
 
 /***************** Event Listeners *****************/
 
