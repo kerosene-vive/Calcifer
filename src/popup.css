@@ -4,8 +4,9 @@
   --text-primary: #1f1f1f;
   --text-secondary: #6e6e80;
   --border-color: #e5e5e5;
-  --accent-color: #1a7f64;
-  --hover-color: #146856;
+  --accent-color: #0066FF; /* Changed to blue */
+  --hover-color: #0052CC; /* Darker blue for hover */
+  --header-height: 45px;
 }
 
 body {
@@ -27,13 +28,35 @@ body {
   position: relative;
 }
 
+.chat-header {
+  height: var(--header-height);
+  padding: 0 1rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid var(--border-color);
+  background-color: var(--bg-primary);
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.bot-name {
+  font-weight: 600;
+  font-size: 1.1rem;
+}
+
+.header-right {
+  display: flex;
+  gap: 0.5rem;
+}
+
+/* Removed loading container to eliminate yellow/white lines */
 .loading-container {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 4px;
-  background: var(--border-color);
+  display: none;
 }
 
 .chat-history {
@@ -43,6 +66,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 1rem;
+  margin-top: 0; /* Remove any top margin */
 }
 
 .message-wrapper {
@@ -51,14 +75,13 @@ body {
 
 .message {
   padding: 1rem;
-  border-radius: 0.5rem;
+  border-radius: 0.75rem;
   width: 100%;
   box-sizing: border-box;
 }
 
 .assistant-message {
   background-color: var(--bg-secondary);
-  border: 1px solid var(--border-color);
 }
 
 .message-header {
@@ -70,7 +93,7 @@ body {
 
 .timestamp {
   color: var(--text-secondary);
-  font-size: 0.8rem;
+  font-size: 0.875rem;
 }
 
 .copy-button {
@@ -79,8 +102,9 @@ body {
   color: var(--text-secondary);
   cursor: pointer;
   padding: 0.25rem 0.5rem;
-  font-size: 0.8rem;
-  border-radius: 0.25rem;
+  font-size: 0.875rem;
+  border-radius: 0.375rem;
+  margin-left: auto; /* Move copy button to the left */
 }
 
 .copy-button:hover {
@@ -90,14 +114,14 @@ body {
 .message-content {
   white-space: pre-wrap;
   word-break: break-word;
+  font-size: 0.9375rem;
+  line-height: 1.5;
 }
 
 .input-area {
-  border-top: 1px solid var(--border-color);
   padding: 1rem;
   background-color: var(--bg-primary);
-  position: sticky;
-  bottom: 0;
+  border-top: 1px solid var(--border-color);
 }
 
 .input-container {
@@ -138,6 +162,7 @@ body {
   cursor: pointer;
   color: white;
   padding: 0;
+  order: -1; /* Move button to the left */
 }
 
 .submit-button:hover {
@@ -149,6 +174,17 @@ body {
   cursor: not-allowed;
 }
 
+.input-footer {
+  margin-top: 0.5rem;
+  text-align: center;
+}
+
+.disclaimer {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+/* Loading indicator and scrollbar styles */
 .loading-indicator {
   position: absolute;
   bottom: 100px;
@@ -178,7 +214,6 @@ body {
   }
 }
 
-/* Scrollbar styling */
 .chat-history::-webkit-scrollbar {
   width: 8px;
 }
