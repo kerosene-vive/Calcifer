@@ -17,7 +17,13 @@
   },
   "action": {
     "default_title": "MLCBot",
-    "default_popup": "popup.html"
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "64": "icons/icon-64.png",
+      "128": "icons/icon-128.png"
+    }
   },
   "content_scripts": [
     {
@@ -29,5 +35,5 @@
     "service_worker": "background.ts",
     "type": "module"
   },
-  "permissions": ["storage", "tabs", "webNavigation",  "scripting", "sidePanel" ]
+  "permissions": ["storage", "tabs", "webNavigation",  "scripting", "sidePanel", "activeTab"]
 }

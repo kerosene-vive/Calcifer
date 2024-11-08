@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@mlc-ai/web-llm": "^0.2.74",
+    "@mozilla/readability": "^0.5.0",
     "progressbar.js": "^1.1.0"
   }
 }
