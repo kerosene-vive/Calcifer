@@ -1,28 +1,52 @@
 "use strict";
 
-// This code is partially adapted from the openai-chatgpt-chrome-extension repo:
-// https://github.com/jessedi0n/openai-chatgpt-chrome-extension
-
 import "./popup.css";
 import {
-  ChatCompletionMessageParam,
   CreateExtensionServiceWorkerMLCEngine,
-  MLCEngineInterface,
   InitProgressReport,
 } from "@mlc-ai/web-llm";
+import { ChatManager } from './chatManager.ts';
 
 /***************** UI elements *****************/
-// Whether or not to use the content from the active tab as the context
-const useContext = false;
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
 const queryInput = document.getElementById("query-input")!;
 const submitButton = document.getElementById("submit-button")!;
+let chatManager: ChatManager;
 
 let isLoadingParams = false;
 let isFirstLoad = true;
 
 (<HTMLButtonElement>submitButton).disabled = true;
+async function summarizeCurrentPage(tabId: number) {
+  if (!isFirstLoad) return; // Summarize only on first load after page change
+  console.log("Page change detected. Attempting to summarize...");
+
+  try {
+    const [result] = await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ['/mnt/data/contentExtractor.ts']
+    });
+
+    if (result && result.result) {
+      console.log("Page content extracted successfully:", result.result);
+
+      const summarizationPrompt = `Summarize this page content: ${result.result}`;
+      await chatManager.processUserMessage(summarizationPrompt, updateAnswer);
+
+      isFirstLoad = false; // Reset summarization flag to avoid repeats until next page load
+    } else {
+      console.error("No content extracted from page.");
+    }
+  } catch (error) {
+    console.error("Failed to extract or summarize content:", error);
+  }
+}
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status === 'complete' && tab.active) {
+    // New page loaded in the active tab
+    summarizeCurrentPage(tabId);
+  }
+});
 
 // Create loading UI elements
 function createLoadingUI(container: HTMLElement, isFirstTime: boolean) {
@@ -57,9 +81,8 @@ function createLoadingUI(container: HTMLElement, isFirstTime: boolean) {
   `;
 }
 
-/***************** Web-LLM MLCEngine Configuration *****************/
 let lastProgress = 0;
-const ANIMATION_DURATION = 500; // ms
+const ANIMATION_DURATION = 500;
 
 const initProgressCallback = (report: InitProgressReport) => {
   chrome.storage.local.get(['modelDownloaded'], function(result) {
@@ -75,29 +98,23 @@ const initProgressCallback = (report: InitProgressReport) => {
         createLoadingUI(progressElement, isFirstLoad);
       }
       
-      // Smoothly interpolate progress
-      const progress = report.progress;
-      const progressPercent = Math.round(progress * 100);
-      
-      // Animate from last progress to new progress
+      const progressPercent = Math.round(report.progress * 100);
       const progressFill = document.getElementById('progress-fill');
+      
       if (progressFill) {
         const start = lastProgress;
         const end = progressPercent;
-        const duration = 300; // ms
+        const duration = 300;
         const startTime = performance.now();
         
         const animateProgress = (currentTime: number) => {
           const elapsed = currentTime - startTime;
           const progress = Math.min(elapsed / duration, 1);
-          
-          // Use easeOutCubic easing function for smooth progression
           const easeProgress = 1 - Math.pow(1 - progress, 3);
           const currentProgress = start + (end - start) * easeProgress;
           
           progressFill.style.width = `${currentProgress}%`;
           
-          // Update text displays
           const percentageText = document.getElementById('progress-percentage');
           const statusText = document.getElementById('progress-status');
           
@@ -153,84 +170,18 @@ function enableInputs() {
   }
 }
 
-const engine: MLCEngineInterface = await CreateExtensionServiceWorkerMLCEngine(
-  "Qwen2-0.5B-Instruct-q4f16_1-MLC",
-  { initProgressCallback: initProgressCallback },
-);
-const chatHistory: ChatCompletionMessageParam[] = [];
-
-isLoadingParams = true;
-
-
-
-/***************** Event Listeners *****************/
-
-// Disable submit button if input field is empty
-queryInput.addEventListener("keyup", () => {
-  if ((<HTMLInputElement>queryInput).value === "") {
-    (<HTMLButtonElement>submitButton).disabled = true;
-  } else {
-    (<HTMLButtonElement>submitButton).disabled = false;
-  }
-});
-
-// If user presses enter, click submit button
-queryInput.addEventListener("keyup", (event) => {
-  if (event.code === "Enter") {
-    event.preventDefault();
-    submitButton.click();
-  }
-});
-
-// Listen for clicks on submit button
-async function handleClick() {
-  // Get the message from the input field
-  const message = (<HTMLInputElement>queryInput).value;
-  console.log("message", message);
-  chatHistory.push({ role: "user", content: message });
-
-  // Clear the answer
-  document.getElementById("answer")!.innerHTML = "";
-  // Hide the answer
-  document.getElementById("answerWrapper")!.style.display = "none";
-  // Show the loading indicator
-  document.getElementById("loading-indicator")!.style.display = "block";
-
-  // Send the chat completion message to the engine
-  let curMessage = "";
-  const completion = await engine.chat.completions.create({
-    stream: true,
-    messages: chatHistory,
-  });
-
-  // Update the answer as the model generates more text
-  for await (const chunk of completion) {
-    const curDelta = chunk.choices[0].delta.content;
-    if (curDelta) {
-      curMessage += curDelta;
-    }
-    updateAnswer(curMessage);
-  }
-  chatHistory.push({ role: "assistant", content: await engine.getMessage() });
-}
-
-submitButton.addEventListener("click", handleClick);
-
 function updateAnswer(answer: string) {
-  // Show answer
   document.getElementById("answerWrapper")!.style.display = "block";
   const answerWithBreaks = answer.replace(/\n/g, "<br>");
   document.getElementById("answer")!.innerHTML = answerWithBreaks;
-  // Add event listener to copy button
+  
   document.getElementById("copyAnswer")!.addEventListener("click", () => {
-    // Get the answer text
-    const answerText = answer;
-    // Copy the answer text to the clipboard
     navigator.clipboard
-      .writeText(answerText)
+      .writeText(answer)
       .then(() => console.log("Answer text copied to clipboard"))
       .catch((err) => console.error("Could not copy text: ", err));
   });
+
   const options: Intl.DateTimeFormatOptions = {
     month: "short",
     day: "2-digit",
@@ -239,28 +190,58 @@ function updateAnswer(answer: string) {
     second: "2-digit",
   };
   const time = new Date().toLocaleString("en-US", options);
-  // Update timestamp
   document.getElementById("timestamp")!.innerText = time;
-  // Hide loading indicator
   document.getElementById("loading-indicator")!.style.display = "none";
 }
 
-function fetchPageContents() {
-  chrome.tabs.query({ currentWindow: true, active: true }, function (tabs) {
-    if (tabs[0]?.id) {
-      const port = chrome.tabs.connect(tabs[0].id, { name: "channelName" });
-      port.postMessage({});
-      port.onMessage.addListener(function (msg) {
-        console.log("Page contents:", msg.contents);
-        chrome.runtime.sendMessage({ context: msg.contents });
-      });
-    }
-  });
+/***************** Event Handlers *****************/
+
+async function handleClick() {
+  if (isFirstLoad) return;  // Skip initial click if first load is active
+
+  const message = (<HTMLInputElement>queryInput).value;
+
+  document.getElementById("answer")!.innerHTML = "";
+  document.getElementById("answerWrapper")!.style.display = "none";
+  document.getElementById("loading-indicator")!.style.display = "block";
+
+  await chatManager.processUserMessage(message, updateAnswer);
 }
 
-// Grab the page contents when the popup is opened
-window.onload = function () {
-  if (useContext) {
-    fetchPageContents();
-  }
-};
+/***************** Initialization *****************/
+
+async function initialize() {
+  console.log("Initializing application...");
+  
+  isFirstLoad = true;  // Reset flag for summarization
+  
+  const engine = await CreateExtensionServiceWorkerMLCEngine(
+    "Qwen2-0.5B-Instruct-q4f16_1-MLC",
+    { initProgressCallback: initProgressCallback }
+  );
+  
+  chatManager = new ChatManager(engine);
+  await chatManager.initializeWithContext();
+
+  queryInput.addEventListener("keyup", (event) => {
+    if ((<HTMLInputElement>queryInput).value === "") {
+      (<HTMLButtonElement>submitButton).disabled = true;
+    } else {
+      (<HTMLButtonElement>submitButton).disabled = false;
+    }
+
+    if (event.code === "Enter") {
+      event.preventDefault();
+      submitButton.click();
+    }
+  });
+  
+  submitButton.addEventListener("click", handleClick);
+  
+  isLoadingParams = true;
+  console.log("Initialization complete");
+
+}
+
+// Start initialization when popup opens
+window.onload = initialize;

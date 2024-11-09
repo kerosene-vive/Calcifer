@@ -283,3 +283,19 @@ body {
 .loading-container.removing {
   animation: slideUp 0.5s ease-out forwards;
 }
+
+.message-icon {
+  width: 48px;
+  height: 48px;
+  margin-right: 8px;
+  vertical-align: middle;
+  background-color: var(--bg-secondary); /* Match the message background */
+  padding: 4px; /* Add some padding around the icon */
+  border-radius: 50%; /* Make it circular */
+}
+
+.message-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
