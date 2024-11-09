@@ -133,7 +133,7 @@ export class ChatManager {
       }
     } catch (error) {
       console.error("Error in handleNewPage:", error);
-      this.updateSummaryUI(`Error: ${error instanceof Error ? error.message : 'Unknown error occurred'}`);
+      this.addMessageToUI(`Error: ${error instanceof Error ? error.message : 'Unknown error occurred'}`, 'assistant');
     }
   }
 
@@ -183,7 +183,7 @@ export class ChatManager {
         const curDelta = chunk.choices[0]?.delta?.content;
         if (curDelta) {
           summaryMessage += curDelta;
-          this.updateSummaryUI(summaryMessage);
+          this.addMessageToUI(summaryMessage, 'assistant', true);
         }
       }
 
@@ -215,59 +215,59 @@ export class ChatManager {
       }
 
       console.error("Error generating summary:", error);
-      this.updateSummaryUI(`Error generating summary: ${error instanceof Error ? error.message : 'Unknown error occurred'}`);
+      this.addMessageToUI(`Error generating summary: ${error instanceof Error ? error.message : 'Unknown error occurred'}`, 'assistant');
     }
   }
 
-  private updateSummaryUI(summary: string): void {
+  private addMessageToUI(content: string, role: 'user' | 'assistant', isUpdating: boolean = false): void {
     try {
       const chatHistoryContainer = document.querySelector('.chat-history');
       if (!chatHistoryContainer) {
         throw new Error("Chat history container not found");
       }
 
-      let summaryElement = document.getElementById("summary-container");
+      let messageElement: HTMLElement;
       
-      if (!summaryElement) {
-        summaryElement = document.createElement("div");
-        summaryElement.id = "summary-container";
-        summaryElement.className = "message-wrapper";
-        
-        summaryElement.innerHTML = `
-          <div class="message assistant-message">
-            <div class="message-header">
-              <img src="/icons/icon-128.png" alt="Bot Icon" class="message-icon" onerror="this.style.display='none'">
-              <span class="timestamp">${new Date().toLocaleTimeString()}</span>
-            </div>
-            <div class="message-content summary-content"></div>
-          </div>
-        `;
-        
-        chatHistoryContainer.insertBefore(summaryElement, chatHistoryContainer.firstChild);
+      if (isUpdating) {
+        messageElement = chatHistoryContainer.querySelector('.message-wrapper:first-child') as HTMLElement;
+        if (!messageElement) {
+          messageElement = this.createMessageElement(content, role);
+          chatHistoryContainer.insertBefore(messageElement, chatHistoryContainer.firstChild);
+        } else {
+          const messageContent = messageElement.querySelector('.message-content');
+          if (messageContent) {
+            messageContent.innerHTML = this.sanitizeHTML(content);
+          }
+        }
+      } else {
+        messageElement = this.createMessageElement(content, role);
+        chatHistoryContainer.appendChild(messageElement);
       }
 
-      const summaryContent = summaryElement.querySelector('.summary-content');
-      if (summaryContent) {
-        summaryContent.innerHTML = this.sanitizeHTML(summary);
-      }
-
-      summaryElement.style.display = 'block';
-      
       const answerWrapper = document.getElementById('answerWrapper');
       if (answerWrapper) {
         answerWrapper.style.display = 'block';
       }
     } catch (error) {
-      console.error("Error updating summary UI:", error);
-      const answerDiv = document.getElementById('answer');
-      if (answerDiv) {
-        answerDiv.textContent = `Error updating summary: ${error instanceof Error ? error.message : 'Unknown error occurred'}`;
-        const answerWrapper = document.getElementById('answerWrapper');
-        if (answerWrapper) {
-          answerWrapper.style.display = 'block';
-        }
-      }
+      console.error("Error updating UI:", error);
     }
+  }
+
+  private createMessageElement(content: string, role: 'user' | 'assistant'): HTMLElement {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'message-wrapper';
+    
+    wrapper.innerHTML = `
+      <div class="message ${role}-message">
+        <div class="message-header">
+          ${role === 'assistant' ? '<img src="/icons/icon-128.png" alt="Bot Icon" class="message-icon" onerror="this.style.display=\'none\'">' : ''}
+          <span class="timestamp">${new Date().toLocaleTimeString()}</span>
+        </div>
+        <div class="message-content">${this.sanitizeHTML(content)}</div>
+      </div>
+    `;
+    
+    return wrapper;
   }
 
   private sanitizeHTML(text: string): string {
@@ -282,6 +282,8 @@ export class ChatManager {
 
   public async processUserMessage(message: string, updateCallback: (text: string) => void): Promise<void> {
     try {
+      this.addMessageToUI(message, 'user');
+      
       this.chatHistory.push({ 
         role: "user", 
         content: message 
@@ -298,6 +300,7 @@ export class ChatManager {
         if (curDelta) {
           curMessage += curDelta;
           updateCallback(curMessage);
+          this.addMessageToUI(curMessage, 'assistant', true);
         }
       }
 
