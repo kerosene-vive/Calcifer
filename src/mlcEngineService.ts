@@ -8,20 +8,20 @@ import {
     ChatCompletionMessageParam
 } from "@mlc-ai/web-llm";
 
-export type { MLCEngineInterface };  // Re-export the original interface
+export type { MLCEngineInterface, ChatCompletionMessageParam };  // Re-export the original interface
 
 // Other interfaces
-export interface IProgressReport {
+export interface ProgressReport {
     progress: number;
     detail: string;
 }
 
-export interface IChatMessage {
+export interface ChatMessage {
     role: 'system' | 'user' | 'assistant';
     content: string;
 }
 
-export interface ICompletionChunk {
+export interface CompletionChunk {
     choices: Array<{
         delta: {
             content?: string;
@@ -29,7 +29,7 @@ export interface ICompletionChunk {
     }>;
 }
 
-export type ProgressCallback = (report: IProgressReport) => void;
+export type ProgressCallback = (report: ProgressReport) => void;
 
 export class MLCEngineService {
     private static instance: MLCEngineService;

@@ -1,5 +1,5 @@
 import "./popup.css";
-import { mlcEngineService, IProgressReport } from "./mlcEngineService";
+import { mlcEngineService, ProgressReport } from "./mlcEngineService";
 import { ChatManager } from './chatManager';
 import { UIManager } from './uiManager';
 
@@ -20,14 +20,14 @@ class PopupManager {
         
         const engine = await mlcEngineService.initializeEngine(this.handleProgressUpdate);
         
-        this.chatManager = new ChatManager(engine);
+        this.chatManager = new ChatManager();
         await this.chatManager.initializeWithContext();
         
         this.isLoadingParams = true;
         console.log("Initialization complete");
     }
 
-    private handleProgressUpdate = (report: IProgressReport): void => {
+    private handleProgressUpdate = (report: ProgressReport): void => {
         chrome.storage.local.get(['modelDownloaded'], (result) => {
             const isFirstTime = !result.modelDownloaded;
             if (!result.modelDownloaded) {
