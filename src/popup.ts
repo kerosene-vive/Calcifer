@@ -17,6 +17,7 @@ class PopupManager {
         this.initializeEventListeners();
     }
 
+    // Initializes event listeners for UI elements
     private initializeEventListeners(): void {
         const elements = this.uiManager.getElements();
         elements.queryInput.addEventListener("keyup", this.handleInputKeyup.bind(this));
@@ -25,6 +26,7 @@ class PopupManager {
         this.setupTabListeners();
     }
 
+    // Sets up listeners for tab updates to trigger summarization
     private setupTabListeners(): void {
         chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
             if (changeInfo.status === 'complete' && tab.active) {
@@ -33,6 +35,7 @@ class PopupManager {
         });
     }
 
+    // Summarizes the content of the current page
     private async summarizeCurrentPage(tabId: number): Promise<void> {
         if (!this.isFirstLoad) return;
 
@@ -55,6 +58,7 @@ class PopupManager {
         }
     }
 
+    // Handles progress updates during model initialization
     private handleProgressUpdate = (report: InitProgressReport): void => {
         chrome.storage.local.get(['modelDownloaded'], (result) => {
             const isFirstTime = !result.modelDownloaded;
@@ -79,6 +83,7 @@ class PopupManager {
         });
     };
 
+    // Handles the submission of user input
     private async handleSubmit(): Promise<void> {
         if (this.isFirstLoad) return;
 
@@ -91,6 +96,7 @@ class PopupManager {
         );
     }
 
+    // Handles keyup events in the input field
     private handleInputKeyup(event: KeyboardEvent): void {
         const input = event.target as HTMLInputElement;
         input.value ? this.uiManager.enableInputs() : this.uiManager.disableSubmit();
@@ -101,6 +107,7 @@ class PopupManager {
         }
     }
 
+    // Initializes the popup manager and sets up the chat manager
     public async initialize(): Promise<void> {
         console.log("Initializing application...");
         this.isFirstLoad = true;

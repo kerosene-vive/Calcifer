@@ -42,12 +42,14 @@ export class ChatManager {
         }
     }
 
+    // Validates that the engine has the required methods for chat completions
     private validateEngine(): void {
         if (!this.engine?.chat?.completions?.create) {
             throw new Error("Invalid engine configuration: Missing required methods");
         }
     }
 
+    // Loads the chat state from local storage
     private async loadState(): Promise<void> {
         try {
             const state = await chrome.storage.local.get(['chatState']) as { chatState?: ChatState };
@@ -65,6 +67,7 @@ export class ChatManager {
         }
     }
 
+    // Saves the current chat state to local storage
     private async saveState(): Promise<void> {
         try {
             const chatState: ChatState = {
@@ -78,6 +81,7 @@ export class ChatManager {
         }
     }
 
+    // Sets up listeners for tab changes and updates the chat state accordingly
     private async setupTabListener(): Promise<void> {
         try {
             const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -108,6 +112,7 @@ export class ChatManager {
         }
     }
 
+    // Handles actions to be taken when a new page is loaded
     private async handleNewPage(): Promise<void> {
         try {
             const pageContent = await ContentExtractor.getPageContent();
@@ -138,6 +143,7 @@ export class ChatManager {
         }
     }
 
+    // Truncates the content to fit within the maximum token limit
     private truncateContent(content: string): string {
         const maxCharacters = Math.floor(this.maxTokens * this.maxCharsPerToken * 0.8);
         
@@ -151,6 +157,7 @@ export class ChatManager {
         return `${firstPart}\n\n[Content truncated...]\n\n${lastPart}`;
     }
 
+    // Validates that a message has the required structure and content
     private validateMessage(message: ChatMessage): boolean {
         return Boolean(
             message &&
@@ -162,6 +169,7 @@ export class ChatManager {
         );
     }
 
+    // Generates a summary of the provided content using the chat engine
     private async generateSummary(content: string): Promise<void> {
         const userMessage: ChatMessage = {
             role: "user",
@@ -220,6 +228,7 @@ export class ChatManager {
         }
     }
 
+    // Processes a user message and generates a response using the chat engine
     public async processUserMessage(message: string, updateCallback: (text: string) => void): Promise<void> {
         try {
             addMessageToUI(message, 'user');
@@ -256,6 +265,7 @@ export class ChatManager {
         }
     }
 
+    // Initializes the chat manager with the current context
     public async initializeWithContext(): Promise<void> {
         await this.loadState();
         await this.handleNewPage();

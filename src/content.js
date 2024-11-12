@@ -8,6 +8,7 @@ class ContentExtractor {
     this.printPageInfo();
   }
 
+  // Prints basic information about the current page
   printPageInfo() {
     console.log("ContentExtractor: Page Info:", {
       url: window.location.href,
@@ -17,6 +18,7 @@ class ContentExtractor {
     });
   }
 
+  // Sets up message handling for incoming messages from the background script
   setupMessageHandling() {
     console.log("ContentExtractor: Setting up message handlers");
 
@@ -52,6 +54,7 @@ class ContentExtractor {
     });
   }
 
+  // Extracts content from the current page using various methods
   async extractContent() {
     console.log("ContentExtractor: Starting content extraction");
     
@@ -60,7 +63,7 @@ class ContentExtractor {
       await new Promise(resolve => window.addEventListener('load', resolve));
     }
 
-    // Try each method in sequence
+    // Try each method in sequence to extract content
     const content = await this.tryReadability() || 
                    await this.tryMainContent() || 
                    await this.getBodyContent();
@@ -77,6 +80,7 @@ class ContentExtractor {
     return content;
   }
 
+  // Attempts to extract content using the Readability library
   async tryReadability() {
     try {
       console.log("ContentExtractor: Attempting Readability");
@@ -107,6 +111,7 @@ class ContentExtractor {
     return null;
   }
 
+  // Attempts to extract content using common main content selectors
   async tryMainContent() {
     console.log("ContentExtractor: Trying main content selectors");
     
@@ -141,6 +146,7 @@ class ContentExtractor {
     return null;
   }
 
+  // Attempts to extract content from the body of the page
   getBodyContent() {
     console.log("ContentExtractor: Attempting body content extraction");
     
@@ -162,6 +168,7 @@ class ContentExtractor {
       'noscript'
     ];
 
+    // Remove unwanted elements from the cloned body
     unwantedSelectors.forEach(selector => {
       bodyClone.querySelectorAll(selector).forEach(el => el.remove());
     });
@@ -175,6 +182,7 @@ class ContentExtractor {
     return text.length > 100 ? text : null;
   }
 
+  // Cleans the extracted text by removing extra whitespace and newlines
   cleanText(text) {
     if (!text) return '';
     
@@ -186,6 +194,7 @@ class ContentExtractor {
     return cleaned;
   }
 
+  // Static method to get page content from the current active tab
   static async getPageContent() {
     console.log("ContentExtractor: Static getPageContent called");
     try {
@@ -252,12 +261,12 @@ class ContentExtractor {
   }
 }
 
-// Initialize
+// Initialize the ContentExtractor instance
 console.log("ContentExtractor: Creating instance...");
 const contentExtractor = new ContentExtractor();
 
-// Export both class and instance
+// Export both the class and the instance
 export { ContentExtractor, contentExtractor };
 
-// Make available for debugging
+// Make the instance available for debugging
 window.contentExtractor = contentExtractor;
