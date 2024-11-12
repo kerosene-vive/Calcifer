@@ -1,8 +1,5 @@
 import "./popup.css";
-import {
-    CreateExtensionServiceWorkerMLCEngine,
-    InitProgressReport,
-} from "@mlc-ai/web-llm";
+import { mlcEngineService, IProgressReport } from "./mlcEngineService";
 import { ChatManager } from './chatManager';
 import { UIManager } from './uiManager';
 
@@ -16,6 +13,43 @@ class PopupManager {
         this.uiManager = new UIManager();
         this.initializeEventListeners();
     }
+
+    public async initialize(): Promise<void> {
+        console.log("Initializing application...");
+        this.isFirstLoad = true;
+        
+        const engine = await mlcEngineService.initializeEngine(this.handleProgressUpdate);
+        
+        this.chatManager = new ChatManager(engine);
+        await this.chatManager.initializeWithContext();
+        
+        this.isLoadingParams = true;
+        console.log("Initialization complete");
+    }
+
+    private handleProgressUpdate = (report: IProgressReport): void => {
+        chrome.storage.local.get(['modelDownloaded'], (result) => {
+            const isFirstTime = !result.modelDownloaded;
+            if (!result.modelDownloaded) {
+                chrome.storage.local.set({ modelDownloaded: true });
+            }
+
+            if (!this.uiManager.getElements().loadingContainer.hasChildNodes()) {
+                this.uiManager.createLoadingUI(isFirstTime);
+            }
+
+            this.uiManager.updateProgressBar(report.progress, isFirstTime);
+
+            if (report.progress >= 1.0) {
+                this.uiManager.handleLoadingComplete(() => {
+                    if (this.isLoadingParams) {
+                        this.uiManager.enableInputs();
+                        this.isLoadingParams = false;
+                    }
+                });
+            }
+        });
+    };
 
     // Initializes event listeners for UI elements
     private initializeEventListeners(): void {
@@ -58,31 +92,6 @@ class PopupManager {
         }
     }
 
-    // Handles progress updates during model initialization
-    private handleProgressUpdate = (report: InitProgressReport): void => {
-        chrome.storage.local.get(['modelDownloaded'], (result) => {
-            const isFirstTime = !result.modelDownloaded;
-            if (!result.modelDownloaded) {
-                chrome.storage.local.set({ modelDownloaded: true });
-            }
-
-            if (!this.uiManager.getElements().loadingContainer.hasChildNodes()) {
-                this.uiManager.createLoadingUI(isFirstTime);
-            }
-
-            this.uiManager.updateProgressBar(report.progress, isFirstTime);
-
-            if (report.progress >= 1.0) {
-                this.uiManager.handleLoadingComplete(() => {
-                    if (this.isLoadingParams) {
-                        this.uiManager.enableInputs();
-                        this.isLoadingParams = false;
-                    }
-                });
-            }
-        });
-    };
-
     // Handles the submission of user input
     private async handleSubmit(): Promise<void> {
         if (this.isFirstLoad) return;
@@ -105,23 +114,6 @@ class PopupManager {
             event.preventDefault();
             this.handleSubmit();
         }
-    }
-
-    // Initializes the popup manager and sets up the chat manager
-    public async initialize(): Promise<void> {
-        console.log("Initializing application...");
-        this.isFirstLoad = true;
-        
-        const engine = await CreateExtensionServiceWorkerMLCEngine(
-            "Qwen2-0.5B-Instruct-q4f16_1-MLC",
-            { initProgressCallback: this.handleProgressUpdate }
-        );
-        
-        this.chatManager = new ChatManager(engine);
-        await this.chatManager.initializeWithContext();
-        
-        this.isLoadingParams = true;
-        console.log("Initialization complete");
     }
 }
 
