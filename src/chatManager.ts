@@ -1,3 +1,4 @@
+import { TabManager, PageContent } from './tabManager';
 import { ContentExtractor } from './content';
 import { addMessageToUI } from './chatUI';
 import { 
@@ -10,26 +11,20 @@ import {
 
 interface ChatState {
     chatHistory: ChatCompletionMessageParam[];
-    currentTabId?: number;
-    currentUrl?: string;
 }
 
 export class ChatManager {
     private engine: MLCEngineInterface;
     private chatHistory: ChatCompletionMessageParam[] = [];
+    private tabManager: TabManager;
     private debugMode: boolean;
-    private currentTabId?: number;
-    private currentUrl?: string;
     private maxTokens: number = 2000;
     private maxCharsPerToken: number = 4;
 
-    constructor(debugMode = true) {
+    constructor(debugMode = false) {
         this.debugMode = debugMode;
+        this.tabManager = new TabManager(debugMode);
         this.initialize();
-        
-        if (this.debugMode) {
-            console.log("ChatManager initialized");
-        }
     }
 
     private async initialize(): Promise<void> {
@@ -37,7 +32,11 @@ export class ChatManager {
             this.engine = await mlcEngineService.initializeEngine();
             this.validateEngine();
             await this.loadState();
-            await this.setupTabListener();
+            this.setupTabManager();
+            
+            if (this.debugMode) {
+                console.log("ChatManager initialized");
+            }
         } catch (error) {
             console.error("Error initializing ChatManager:", error);
             throw error;
@@ -45,9 +44,8 @@ export class ChatManager {
     }
 
     private validateEngine(): void {
-        const engine = mlcEngineService.getEngine();
-        if (!engine?.chat?.completions?.create) {
-            throw new Error("Invalid engine configuration: Missing required methods");
+        if (!this.engine?.chat?.completions?.create) {
+            throw new Error("Invalid engine configuration");
         }
     }
 
@@ -56,12 +54,6 @@ export class ChatManager {
             const state = await chrome.storage.local.get(['chatState']) as { chatState?: ChatState };
             if (state.chatState) {
                 this.chatHistory = state.chatState.chatHistory;
-                this.currentTabId = state.chatState.currentTabId;
-                this.currentUrl = state.chatState.currentUrl;
-                
-                if (this.debugMode) {
-                    console.log("State loaded successfully");
-                }
             }
         } catch (error) {
             console.error("Error loading state:", error);
@@ -70,64 +62,27 @@ export class ChatManager {
 
     private async saveState(): Promise<void> {
         try {
-            const chatState: ChatState = {
-                chatHistory: this.chatHistory,
-                currentTabId: this.currentTabId,
-                currentUrl: this.currentUrl
-            };
+            const chatState: ChatState = { chatHistory: this.chatHistory };
             await chrome.storage.local.set({ chatState });
         } catch (error) {
             console.error("Error saving state:", error);
         }
     }
 
-    private async setupTabListener(): Promise<void> {
-        try {
-            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-            if (tab?.id && tab.url !== this.currentUrl) {
-                this.currentTabId = tab.id;
-                this.currentUrl = tab.url;
-                await this.handleNewPage();
-            }
-
-            chrome.tabs.onActivated.addListener(async (activeInfo) => {
-                const tab = await chrome.tabs.get(activeInfo.tabId);
-                if (tab.url !== this.currentUrl) {
-                    this.currentTabId = activeInfo.tabId;
-                    this.currentUrl = tab.url;
-                    await this.handleNewPage();
-                }
-            });
-
-            chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-                if (changeInfo.status === 'complete' && tab.active && tab.url !== this.currentUrl) {
-                    this.currentTabId = tabId;
-                    this.currentUrl = tab.url;
-                    await this.handleNewPage();
-                }
-            });
-        } catch (error) {
-            console.error("Error setting up tab listener:", error);
-        }
+    private setupTabManager(): void {
+        this.tabManager.onTabChange(async (_, pageContent) => {
+            await this.handleNewPage(pageContent);
+        });
     }
 
-    private async handleNewPage(): Promise<void> {
+    private async handleNewPage(pageContent: PageContent): Promise<void> {
         try {
-            const pageContent = await ContentExtractor.getPageContent();
-            
-            if (!pageContent) {
-                throw new Error("No content extracted from page");
-            }
-
-            const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-            const currentTab = tabs[0];
-
             this.chatHistory = [];
-
-            let truncatedContent = this.truncateContent(pageContent);
+            const truncatedContent = this.truncateContent(pageContent.content);
+            
             const systemMessage: ChatMessage = {
                 role: "system",
-                content: `Summarize this webpage (${currentTab.title}): ${truncatedContent}`
+                content: `Summarize this webpage (${pageContent.title}): ${truncatedContent}`
             };
 
             if (this.validateMessage(systemMessage)) {
@@ -137,16 +92,14 @@ export class ChatManager {
             }
         } catch (error) {
             console.error("Error in handleNewPage:", error);
-            addMessageToUI(`Error: ${error instanceof Error ? error.message : 'Unknown error occurred'}`, 'assistant');
+            addMessageToUI(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`, 'assistant');
         }
     }
 
     private truncateContent(content: string): string {
         const maxCharacters = Math.floor(this.maxTokens * this.maxCharsPerToken * 0.8);
         
-        if (content.length <= maxCharacters) {
-            return content;
-        }
+        if (content.length <= maxCharacters) return content;
 
         const firstPart = content.slice(0, Math.floor(maxCharacters * 0.6));
         const lastPart = content.slice(-Math.floor(maxCharacters * 0.2));
@@ -175,15 +128,9 @@ export class ChatManager {
             this.chatHistory.push(userMessage);
         }
 
-        let summaryMessage = "";
-
         try {
-            const engine = mlcEngineService.getEngine();
-            if (!engine) {
-                throw new Error("Engine not initialized");
-            }
-
-            const completion = await engine.chat.completions.create({
+            let summaryMessage = "";
+            const completion = await this.engine.chat.completions.create({
                 stream: true,
                 messages: this.chatHistory,
             });
@@ -203,7 +150,7 @@ export class ChatManager {
             this.chatHistory.push({ 
                 role: "assistant", 
                 content: summaryMessage 
-            } as ChatMessage);
+            });
 
             await this.saveState();
         } catch (error) {
@@ -222,9 +169,7 @@ export class ChatManager {
                 await this.generateSummary(shorterContent);
                 return;
             }
-
-            console.error("Error generating summary:", error);
-            addMessageToUI(`Error generating summary: ${error instanceof Error ? error.message : 'Unknown error occurred'}`, 'assistant');
+            throw error;
         }
     }
 
@@ -235,15 +180,10 @@ export class ChatManager {
             this.chatHistory.push({ 
                 role: "user", 
                 content: message 
-            } as ChatMessage);
+            });
 
             let curMessage = "";
-            const engine = mlcEngineService.getEngine();
-            if (!engine) {
-                throw new Error("Engine not initialized");
-            }
-
-            const completion = await engine.chat.completions.create({
+            const completion = await this.engine.chat.completions.create({
                 stream: true,
                 messages: this.chatHistory,
             });
@@ -260,7 +200,7 @@ export class ChatManager {
             this.chatHistory.push({ 
                 role: "assistant", 
                 content: curMessage 
-            } as ChatMessage);
+            });
 
             await this.saveState();
         } catch (error) {
@@ -271,6 +211,6 @@ export class ChatManager {
 
     public async initializeWithContext(): Promise<void> {
         await this.loadState();
-        await this.handleNewPage();
+        await this.tabManager.refreshCurrentTab();
     }
 }
