@@ -4,6 +4,34 @@ class ContentExtractor {
   constructor() {
     this.DEFAULT_ERROR_MESSAGE = "Unable to extract content from this page.";
     this.MIN_CONTENT_LENGTH = 100;
+    this.SEARCH_ENGINES = {
+      google: {
+        domain: 'google.com',
+        selectors: [
+          '#search',
+          '#rso',
+          '[role="main"] #center_col',
+          '.g',
+          '.MjjYud'
+        ],
+        unwantedSelectors: [
+          '#botstuff',
+          '#bottomplayer',
+          '#topstuff',
+          '.related-question-pair'
+        ]
+      },
+      bing: {
+        domain: 'bing.com',
+        selectors: ['#b_results', '.b_algo'],
+        unwantedSelectors: ['#b_footer', '#b_header']
+      },
+      duckduckgo: {
+        domain: 'duckduckgo.com',
+        selectors: ['.results', '.result'],
+        unwantedSelectors: ['.badge-link']
+      }
+    };
     this.setupMessageHandling();
   }
 
@@ -34,12 +62,88 @@ class ContentExtractor {
     });
   }
 
+  isSearchEngine(url) {
+    return Object.values(this.SEARCH_ENGINES).some(engine => 
+      url.includes(engine.domain)
+    );
+  }
+
+  getSearchEngineConfig(url) {
+    return Object.values(this.SEARCH_ENGINES).find(engine => 
+      url.includes(engine.domain)
+    );
+  }
+
+  async waitForDynamicContent(selectors, timeout = 3000) {
+    const startTime = Date.now();
+    
+    while (Date.now() - startTime < timeout) {
+      for (const selector of selectors) {
+        const element = document.querySelector(selector);
+        if (element && element.textContent.trim()) {
+          return true;
+        }
+      }
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    return false;
+  }
+
+  async extractSearchResults(engineConfig) {
+    try {
+      // Wait for search results to load
+      await this.waitForDynamicContent(engineConfig.selectors);
+
+      let searchResults = [];
+
+      // Extract from each search result container
+      for (const selector of engineConfig.selectors) {
+        const elements = document.querySelectorAll(selector);
+        elements.forEach(element => {
+          // Clone to safely manipulate
+          const elementClone = element.cloneNode(true);
+
+          // Remove unwanted elements
+          engineConfig.unwantedSelectors?.forEach(unwantedSelector => {
+            elementClone.querySelectorAll(unwantedSelector)
+              .forEach(el => el.remove());
+          });
+
+          // Extract text and links
+          const text = this.cleanText(elementClone.textContent);
+          const links = Array.from(elementClone.querySelectorAll('a'))
+            .map(a => ({
+              text: this.cleanText(a.textContent),
+              url: a.href
+            }))
+            .filter(link => link.text.length > 0);
+
+          if (text.length > 0) {
+            searchResults.push({ text, links });
+          }
+        });
+      }
+
+      // Format search results
+      if (searchResults.length > 0) {
+        return searchResults.map(result => 
+          `${result.text}${result.links.length ? '\nRelevant links:\n' + 
+          result.links.map(link => `- ${link.text}: ${link.url}`).join('\n') : ''}`
+        ).join('\n\n');
+      }
+
+      return null;
+    } catch (error) {
+      return null;
+    }
+  }
+
   async extractContent() {
     try {
       // Wait for page to be fully loaded
       if (document.readyState !== 'complete') {
         await new Promise(resolve => {
-          const timeout = setTimeout(() => resolve(), 5000); // 5s timeout
+          const timeout = setTimeout(() => resolve(), 5000);
           window.addEventListener('load', () => {
             clearTimeout(timeout);
             resolve();
@@ -47,14 +151,28 @@ class ContentExtractor {
         });
       }
 
-      // Get basic page info
+      const url = window.location.href || '';
       const pageInfo = {
-        url: window.location.href || '',
+        url,
         title: document.title || '',
         timestamp: new Date().toISOString()
       };
 
-      // Try each extraction method
+      // Check if current page is a search engine
+      if (this.isSearchEngine(url)) {
+        const engineConfig = this.getSearchEngineConfig(url);
+        const searchContent = await this.extractSearchResults(engineConfig);
+        
+        if (searchContent) {
+          return {
+            ...pageInfo,
+            content: searchContent,
+            extractionMethod: 'search_results'
+          };
+        }
+      }
+
+      // Try regular extraction methods
       const content = await this.safeExtract();
 
       if (!content) {
@@ -85,9 +203,13 @@ class ContentExtractor {
 
   async safeExtract() {
     try {
+      // Handle dynamic content
+      await this.waitForDynamicContent(['main', 'article', '#content']);
+
       // Try each method in sequence
       const content = await this.tryReadability() || 
                      await this.tryMainContent() || 
+                     await this.tryDynamicContent() ||
                      await this.tryBodyContent();
 
       return content || this.DEFAULT_ERROR_MESSAGE;
@@ -96,6 +218,50 @@ class ContentExtractor {
     }
   }
 
+  async tryDynamicContent() {
+    try {
+      // Look for dynamic content containers
+      const dynamicSelectors = [
+        '[data-content]',
+        '[data-component]',
+        '.dynamic-content',
+        '#app',
+        '#root',
+        '.main-content',
+        '[role="main"]'
+      ];
+
+      for (const selector of dynamicSelectors) {
+        const element = document.querySelector(selector);
+        if (element) {
+          const cleanedContent = this.cleanText(element.textContent || '');
+          const validContent = this.validateContent(cleanedContent);
+          if (validContent) return validContent;
+        }
+      }
+
+      // Try finding the largest text container
+      const textNodes = Array.from(document.body.querySelectorAll('*'))
+        .filter(el => {
+          const text = this.cleanText(el.textContent || '');
+          return text.length > this.MIN_CONTENT_LENGTH;
+        })
+        .sort((a, b) => 
+          (b.textContent?.length || 0) - (a.textContent?.length || 0)
+        );
+
+      if (textNodes.length > 0) {
+        const cleanedContent = this.cleanText(textNodes[0].textContent || '');
+        return this.validateContent(cleanedContent);
+      }
+
+      return null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  // Previous methods remain the same...
   async tryReadability() {
     try {
       if (!document?.documentElement || !isProbablyReaderable(document)) {
@@ -152,11 +318,12 @@ class ContentExtractor {
 
       const bodyClone = document.body.cloneNode(true);
       
-      // Remove unwanted elements
       const unwantedSelectors = [
         'script', 'style', 'iframe', 'nav', 'header', 'footer',
         '.ads', '.comments', 'noscript', '[role="complementary"]',
-        '[role="navigation"]', '[role="banner"]', '[role="contentinfo"]'
+        '[role="navigation"]', '[role="banner"]', '[role="contentinfo"]',
+        'meta', 'link', '#cookie-banner', '.cookie-notice',
+        '.advertisement', '.social-share', '.related-posts'
       ];
 
       unwantedSelectors.forEach(selector => {
@@ -179,13 +346,15 @@ class ContentExtractor {
     if (!text || typeof text !== 'string') return '';
 
     return text
-      .replace(/\s+/g, ' ')           // Replace multiple spaces with single space
-      .replace(/\n\s*\n/g, '\n\n')    // Normalize line breaks
-      .replace(/[^\S\r\n]+/g, ' ')    // Replace multiple whitespace with single space
-      .replace(/^\s+|\s+$/g, '')      // Trim start and end
-      .replace(/\t/g, ' ')            // Replace tabs with spaces
-      .replace(/\u00A0/g, ' ')        // Replace non-breaking spaces
-      .replace(/\u200B/g, '')         // Remove zero-width spaces
+      .replace(/\s+/g, ' ')
+      .replace(/\n\s*\n/g, '\n\n')
+      .replace(/[^\S\r\n]+/g, ' ')
+      .replace(/^\s+|\s+$/g, '')
+      .replace(/\t/g, ' ')
+      .replace(/\u00A0/g, ' ')
+      .replace(/\u200B/g, '')
+      .replace(/^(?:[\t ]*(?:\r?\n|\r))+/, '')  // Remove leading newlines
+      .replace(/(?:[\t ]*(?:\r?\n|\r))+$/, '')  // Remove trailing newlines
       .trim();
   }
 
