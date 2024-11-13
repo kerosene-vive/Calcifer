@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "MLCBot",
+  "name": "Calcifer Nano",
   "version": "0.1.0",
   "description": "Chat with your browser",
   "icons": {
@@ -16,7 +16,7 @@
     "default_path": "popup.html"
   },
   "action": {
-    "default_title": "MLCBot",
+    "default_title": "Calcifer Nano",
     "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon-16.png",

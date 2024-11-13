@@ -1,263 +1,412 @@
-// content.js
 import { isProbablyReaderable, Readability } from '@mozilla/readability';
 
 class ContentExtractor {
   constructor() {
-    console.log("ContentExtractor: Initializing...");
+    this.DEFAULT_ERROR_MESSAGE = "Unable to extract content from this page.";
+    this.MIN_CONTENT_LENGTH = 100;
+    this.SEARCH_ENGINES = {
+      google: {
+        domain: 'google.com',
+        selectors: [
+          '#search',
+          '#rso',
+          '[role="main"] #center_col',
+          '.g',
+          '.MjjYud'
+        ],
+        unwantedSelectors: [
+          '#botstuff',
+          '#bottomplayer',
+          '#topstuff',
+          '.related-question-pair'
+        ]
+      },
+      bing: {
+        domain: 'bing.com',
+        selectors: ['#b_results', '.b_algo'],
+        unwantedSelectors: ['#b_footer', '#b_header']
+      },
+      duckduckgo: {
+        domain: 'duckduckgo.com',
+        selectors: ['.results', '.result'],
+        unwantedSelectors: ['.badge-link']
+      }
+    };
     this.setupMessageHandling();
-    this.printPageInfo();
-  }
-
-  printPageInfo() {
-    console.log("ContentExtractor: Page Info:", {
-      url: window.location.href,
-      title: document.title,
-      readyState: document.readyState,
-      hasBody: !!document.body
-    });
   }
 
   setupMessageHandling() {
-    console.log("ContentExtractor: Setting up message handlers");
-
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-      console.log("ContentExtractor: Received message:", message);
-      
       if (message.type === 'EXTRACT_CONTENT') {
-        console.log("ContentExtractor: Starting extraction process");
         this.extractContent()
-          .then(content => {
-            console.log("ContentExtractor: Extraction successful:", {
-              contentLength: content?.length,
-              sample: content?.substring(0, 100)
-            });
+          .then(result => {
             chrome.runtime.sendMessage({
               type: 'CONTENT_EXTRACTED',
-              content: content,
+              ...result,
               timestamp: new Date().toISOString()
             });
             sendResponse({ success: true });
           })
           .catch(error => {
-            console.error("ContentExtractor: Extraction failed:", error);
-            chrome.runtime.sendMessage({
+            const errorResult = {
               type: 'EXTRACTION_ERROR',
+              content: this.DEFAULT_ERROR_MESSAGE,
               error: error.message,
               timestamp: new Date().toISOString()
-            });
-            sendResponse({ success: false, error: error.message });
+            };
+            chrome.runtime.sendMessage(errorResult);
+            sendResponse({ success: false, ...errorResult });
           });
-        return true; // Keep channel open for async response
+        return true;
       }
     });
   }
 
-  async extractContent() {
-    console.log("ContentExtractor: Starting content extraction");
-    
-    if (document.readyState !== 'complete') {
-      console.log("ContentExtractor: Waiting for page load");
-      await new Promise(resolve => window.addEventListener('load', resolve));
-    }
-
-    // Try each method in sequence
-    const content = await this.tryReadability() || 
-                   await this.tryMainContent() || 
-                   await this.getBodyContent();
-
-    if (!content) {
-      throw new Error("No readable content found on page");
-    }
-
-    console.log("ContentExtractor: Content extracted successfully", {
-      length: content.length,
-      sample: content.substring(0, 100)
-    });
-
-    return content;
+  isSearchEngine(url) {
+    return Object.values(this.SEARCH_ENGINES).some(engine => 
+      url.includes(engine.domain)
+    );
   }
 
+  getSearchEngineConfig(url) {
+    return Object.values(this.SEARCH_ENGINES).find(engine => 
+      url.includes(engine.domain)
+    );
+  }
+
+  async waitForDynamicContent(selectors, timeout = 3000) {
+    const startTime = Date.now();
+    
+    while (Date.now() - startTime < timeout) {
+      for (const selector of selectors) {
+        const element = document.querySelector(selector);
+        if (element && element.textContent.trim()) {
+          return true;
+        }
+      }
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    return false;
+  }
+
+  async extractSearchResults(engineConfig) {
+    try {
+      // Wait for search results to load
+      await this.waitForDynamicContent(engineConfig.selectors);
+
+      let searchResults = [];
+
+      // Extract from each search result container
+      for (const selector of engineConfig.selectors) {
+        const elements = document.querySelectorAll(selector);
+        elements.forEach(element => {
+          // Clone to safely manipulate
+          const elementClone = element.cloneNode(true);
+
+          // Remove unwanted elements
+          engineConfig.unwantedSelectors?.forEach(unwantedSelector => {
+            elementClone.querySelectorAll(unwantedSelector)
+              .forEach(el => el.remove());
+          });
+
+          // Extract text and links
+          const text = this.cleanText(elementClone.textContent);
+          const links = Array.from(elementClone.querySelectorAll('a'))
+            .map(a => ({
+              text: this.cleanText(a.textContent),
+              url: a.href
+            }))
+            .filter(link => link.text.length > 0);
+
+          if (text.length > 0) {
+            searchResults.push({ text, links });
+          }
+        });
+      }
+
+      // Format search results
+      if (searchResults.length > 0) {
+        return searchResults.map(result => 
+          `${result.text}${result.links.length ? '\nRelevant links:\n' + 
+          result.links.map(link => `- ${link.text}: ${link.url}`).join('\n') : ''}`
+        ).join('\n\n');
+      }
+
+      return null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  async extractContent() {
+    try {
+      // Wait for page to be fully loaded
+      if (document.readyState !== 'complete') {
+        await new Promise(resolve => {
+          const timeout = setTimeout(() => resolve(), 5000);
+          window.addEventListener('load', () => {
+            clearTimeout(timeout);
+            resolve();
+          });
+        });
+      }
+
+      const url = window.location.href || '';
+      const pageInfo = {
+        url,
+        title: document.title || '',
+        timestamp: new Date().toISOString()
+      };
+
+      // Check if current page is a search engine
+      if (this.isSearchEngine(url)) {
+        const engineConfig = this.getSearchEngineConfig(url);
+        const searchContent = await this.extractSearchResults(engineConfig);
+        
+        if (searchContent) {
+          return {
+            ...pageInfo,
+            content: searchContent,
+            extractionMethod: 'search_results'
+          };
+        }
+      }
+
+      // Try regular extraction methods
+      const content = await this.safeExtract();
+
+      if (!content) {
+        return {
+          ...pageInfo,
+          content: this.DEFAULT_ERROR_MESSAGE,
+          extractionMethod: 'failed'
+        };
+      }
+
+      return {
+        ...pageInfo,
+        content,
+        extractionMethod: 'success'
+      };
+
+    } catch (error) {
+      return {
+        url: window.location.href || '',
+        title: document.title || '',
+        content: this.DEFAULT_ERROR_MESSAGE,
+        error: error.message,
+        timestamp: new Date().toISOString(),
+        extractionMethod: 'error'
+      };
+    }
+  }
+
+  async safeExtract() {
+    try {
+      // Handle dynamic content
+      await this.waitForDynamicContent(['main', 'article', '#content']);
+
+      // Try each method in sequence
+      const content = await this.tryReadability() || 
+                     await this.tryMainContent() || 
+                     await this.tryDynamicContent() ||
+                     await this.tryBodyContent();
+
+      return content || this.DEFAULT_ERROR_MESSAGE;
+    } catch (error) {
+      return this.DEFAULT_ERROR_MESSAGE;
+    }
+  }
+
+  async tryDynamicContent() {
+    try {
+      // Look for dynamic content containers
+      const dynamicSelectors = [
+        '[data-content]',
+        '[data-component]',
+        '.dynamic-content',
+        '#app',
+        '#root',
+        '.main-content',
+        '[role="main"]'
+      ];
+
+      for (const selector of dynamicSelectors) {
+        const element = document.querySelector(selector);
+        if (element) {
+          const cleanedContent = this.cleanText(element.textContent || '');
+          const validContent = this.validateContent(cleanedContent);
+          if (validContent) return validContent;
+        }
+      }
+
+      // Try finding the largest text container
+      const textNodes = Array.from(document.body.querySelectorAll('*'))
+        .filter(el => {
+          const text = this.cleanText(el.textContent || '');
+          return text.length > this.MIN_CONTENT_LENGTH;
+        })
+        .sort((a, b) => 
+          (b.textContent?.length || 0) - (a.textContent?.length || 0)
+        );
+
+      if (textNodes.length > 0) {
+        const cleanedContent = this.cleanText(textNodes[0].textContent || '');
+        return this.validateContent(cleanedContent);
+      }
+
+      return null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  // Previous methods remain the same...
   async tryReadability() {
     try {
-      console.log("ContentExtractor: Attempting Readability");
-      
-      if (!isProbablyReaderable(document)) {
-        console.log("ContentExtractor: Page not readable by Readability");
+      if (!document?.documentElement || !isProbablyReaderable(document)) {
         return null;
       }
 
       const documentClone = document.cloneNode(true);
-      const reader = new Readability(documentClone, {
-        charThreshold: 20,
-        classesToPreserve: ['content', 'article']
-      });
-      
+      const reader = new Readability(documentClone);
       const article = reader.parse();
-      if (article?.textContent) {
-        const text = this.cleanText(article.textContent);
-        console.log("ContentExtractor: Readability extraction successful:", {
-          length: text.length,
-          sample: text.substring(0, 100)
-        });
-        return text;
+
+      if (!article?.textContent) {
+        return null;
       }
+
+      const cleanedContent = this.cleanText(article.textContent);
+      return this.validateContent(cleanedContent);
+
     } catch (error) {
-      console.error("ContentExtractor: Readability failed:", error);
+      return null;
     }
-    return null;
   }
 
   async tryMainContent() {
-    console.log("ContentExtractor: Trying main content selectors");
-    
-    const selectors = [
-      'main',
-      'article',
-      '[role="main"]',
-      '#main-content',
-      '.article-content',
-      '.post-content',
-      '#content',
-      '.content'
-    ];
+    try {
+      const selectors = [
+        'main',
+        'article',
+        '[role="main"]',
+        '#main-content',
+        '.article-content',
+        '.post-content',
+        '#content',
+        '.content'
+      ];
 
-    for (const selector of selectors) {
-      const element = document.querySelector(selector);
-      if (element) {
-        console.log(`ContentExtractor: Found element with selector: ${selector}`);
-        const text = this.cleanText(element.textContent || '');
-        if (text.length > 100) {
-          console.log("ContentExtractor: Main content extracted:", {
-            selector,
-            length: text.length,
-            sample: text.substring(0, 100)
-          });
-          return text;
+      for (const selector of selectors) {
+        const element = document.querySelector(selector);
+        if (element) {
+          const cleanedContent = this.cleanText(element.textContent || '');
+          const validContent = this.validateContent(cleanedContent);
+          if (validContent) return validContent;
         }
       }
-    }
-    
-    console.log("ContentExtractor: No main content found");
-    return null;
-  }
-
-  getBodyContent() {
-    console.log("ContentExtractor: Attempting body content extraction");
-    
-    if (!document.body) {
-      console.log("ContentExtractor: No body element found");
+      
+      return null;
+    } catch (error) {
       return null;
     }
+  }
 
-    const bodyClone = document.body.cloneNode(true);
-    const unwantedSelectors = [
-      'script', 
-      'style', 
-      'iframe', 
-      'nav', 
-      'header', 
-      'footer',
-      '.ads', 
-      '.comments', 
-      'noscript'
-    ];
+  async tryBodyContent() {
+    try {
+      if (!document?.body) return null;
 
-    unwantedSelectors.forEach(selector => {
-      bodyClone.querySelectorAll(selector).forEach(el => el.remove());
-    });
+      const bodyClone = document.body.cloneNode(true);
+      
+      const unwantedSelectors = [
+        'script', 'style', 'iframe', 'nav', 'header', 'footer',
+        '.ads', '.comments', 'noscript', '[role="complementary"]',
+        '[role="navigation"]', '[role="banner"]', '[role="contentinfo"]',
+        'meta', 'link', '#cookie-banner', '.cookie-notice',
+        '.advertisement', '.social-share', '.related-posts'
+      ];
 
-    const text = this.cleanText(bodyClone.textContent || '');
-    console.log("ContentExtractor: Body content extraction:", {
-      length: text.length,
-      sample: text.substring(0, 100)
-    });
-    
-    return text.length > 100 ? text : null;
+      unwantedSelectors.forEach(selector => {
+        try {
+          bodyClone.querySelectorAll(selector).forEach(el => el.remove());
+        } catch (e) {
+          // Continue if selector fails
+        }
+      });
+
+      const cleanedContent = this.cleanText(bodyClone.textContent || '');
+      return this.validateContent(cleanedContent);
+
+    } catch (error) {
+      return null;
+    }
   }
 
   cleanText(text) {
-    if (!text) return '';
-    
-    const cleaned = text
+    if (!text || typeof text !== 'string') return '';
+
+    return text
       .replace(/\s+/g, ' ')
       .replace(/\n\s*\n/g, '\n\n')
+      .replace(/[^\S\r\n]+/g, ' ')
+      .replace(/^\s+|\s+$/g, '')
+      .replace(/\t/g, ' ')
+      .replace(/\u00A0/g, ' ')
+      .replace(/\u200B/g, '')
+      .replace(/^(?:[\t ]*(?:\r?\n|\r))+/, '')  // Remove leading newlines
+      .replace(/(?:[\t ]*(?:\r?\n|\r))+$/, '')  // Remove trailing newlines
       .trim();
+  }
+
+  validateContent(content) {
+    if (!content || typeof content !== 'string') {
+      return null;
+    }
+
+    const cleaned = this.cleanText(content);
+    
+    // Check minimum length and maximum length
+    if (cleaned.length < this.MIN_CONTENT_LENGTH || cleaned.length > 1000000) {
+      return null;
+    }
+
+    // Check if content is mostly gibberish or repetitive
+    const words = cleaned.split(/\s+/);
+    const uniqueWords = new Set(words.map(w => w.toLowerCase()));
+    
+    // If there's very low word variety, it might be a menu/navigation
+    if (words.length > 50 && uniqueWords.size < words.length * 0.1) {
+      return null;
+    }
 
     return cleaned;
   }
 
   static async getPageContent() {
-    console.log("ContentExtractor: Static getPageContent called");
     try {
       const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
       const currentTab = tabs[0];
       
-      if (!currentTab.id) return null;
+      if (!currentTab?.id) {
+        return "Unable to access the current tab.";
+      }
 
       const [{ result }] = await chrome.scripting.executeScript({
         target: { tabId: currentTab.id },
         func: () => {
-          const selectors = [
-            'main',
-            'article',
-            '[role="main"]',
-            '#main-content',
-            '.article-content',
-            '.post-content',
-            '#content',
-            '.content'
-          ];
-
-          // Try to get content from main selectors first
-          for (const selector of selectors) {
-            const element = document.querySelector(selector);
-            if (element?.textContent) {
-              return {
-                content: element.textContent,
-                url: window.location.href,
-                title: document.title
-              };
-            }
-          }
-
-          // Fallback to body content
-          if (document.body) {
-            const bodyClone = document.body.cloneNode(true);
-            // Remove unwanted elements
-            ['script', 'style', 'iframe', 'nav', 'header', 'footer'].forEach(tag => {
-              bodyClone.querySelectorAll(tag).forEach(el => el.remove());
-            });
-            
-            return {
-              content: bodyClone.textContent,
-              url: window.location.href,
-              title: document.title
-            };
-          }
-
-          return null;
+          const extractor = new ContentExtractor();
+          return extractor.extractContent();
         }
       });
 
-      console.log("ContentExtractor: Static method succeeded:", {
-        contentLength: result?.content?.length,
-        sample: result?.content?.substring(0, 100)
-      });
+      return result?.content || "Unable to extract content from this page.";
 
-      return result?.content || null;
     } catch (error) {
-      console.error("ContentExtractor: Static method failed:", error);
-      return null;
+      return "Unable to extract content from this page.";
     }
   }
 }
 
-// Initialize
-console.log("ContentExtractor: Creating instance...");
+// Initialize and export
 const contentExtractor = new ContentExtractor();
-
-// Export both class and instance
 export { ContentExtractor, contentExtractor };
-
-// Make available for debugging
-window.contentExtractor = contentExtractor;
