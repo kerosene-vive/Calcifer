@@ -3,4 +3,3 @@ dist
 .parcel-cache
 package-lock.json
 .DS_Store
-.DS_Store
