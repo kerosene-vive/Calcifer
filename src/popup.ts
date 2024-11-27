@@ -1,60 +1,336 @@
 import "./popup.css";
-import { mlcEngineService, ProgressReport } from "./mlcEngineService";
-import { ChatManager } from './chatManager';
-import { UIManager } from './uiManager';
+import { ChatManager } from './managers/chatManager.js';
+import { UIManager } from './managers/uiManager.js';
+import { ModelLoader } from './model/modelLoader.js';
+
+
+declare var navigator: Navigator;
+
+
+function patchWebGPU(): void {
+    if (!navigator.gpu) return;
+    const originalRequestAdapter = navigator.gpu.requestAdapter;
+    navigator.gpu.requestAdapter = async function (...args): Promise<any | null> {
+        const adapter = await originalRequestAdapter.apply(this, args);
+        if (!adapter) return null;
+        adapter.requestAdapterInfo = function (): Promise<{ vendor: string; architecture: string }> {
+            return Promise.resolve(this.info || { vendor: "unknown", architecture: "unknown" });
+        };
+        const originalRequestDevice = adapter.requestDevice;
+        adapter.requestDevice = async function (...deviceArgs): Promise<any | null> {
+            const device = await originalRequestDevice.apply(this, deviceArgs);
+            if (!device) return null;
+            let adapterInfoValue: { vendor: string; architecture: string } | null = null;
+            Object.defineProperty(device, "adapterInfo", {
+                get: function () {
+                    return adapterInfoValue || adapter.info || { vendor: "unknown", architecture: "unknown" };
+                },
+                set: function (value) {
+                    adapterInfoValue = value;
+                    return true;
+                },
+                configurable: true,
+                enumerable: true,
+            });
+                return device;
+        };
+        return adapter;
+    };
+}
+
+
+declare global {
+    interface Window {
+        ModuleFactory: any;
+        gc?: () => void;
+        genaiModule?: {
+            FilesetResolver: any;
+            LlmInference: any;
+        };
+    }
+}
+
+
+interface Performance {
+    memory?: {
+        usedJSHeapSize: number;
+        totalJSHeapSize: number;
+        jsHeapSizeLimit: number;
+    };
+}
+
 
 export class PopupManager {
     private chatManager: ChatManager | null = null;
     private uiManager: UIManager;
-    private isLoadingParams: boolean = false;
     private isFirstLoad: boolean = true;
-
+    private llmInference: any = null;
+    private loraModel: any = null;
+    private debug: HTMLElement;
+    private status: HTMLElement;
+    private initRetryCount: number = 0;
+    private readonly MAX_RETRIES = 3;
+    private modelLoader: ModelLoader;
     constructor() {
         this.uiManager = new UIManager();
+        this.debug = document.getElementById('debug') || document.createElement('div');
+        this.status = document.getElementById('status') || document.createElement('div');
+        this.modelLoader = new ModelLoader(this.debug);
         this.initializeEventListeners();
+        this.addStyles();
     }
+
+
+    private async loadGenAIBundle(): Promise<void> {
+        return new Promise(async (resolve, reject) => {
+            try {
+                const genaiWasmPath = chrome.runtime.getURL('libs/genai_wasm_internal.js');
+                const wasmScript = document.createElement('script');
+                wasmScript.src = genaiWasmPath;
+                wasmScript.type = 'text/javascript';
+                const nonce = crypto.randomUUID();
+                wasmScript.nonce = nonce;
+                await new Promise<void>((resolveWasm, rejectWasm) => {
+                    wasmScript.onload = () => {
+                        resolveWasm();
+                    };
+                    wasmScript.onerror = (e) => {
+                        rejectWasm(new Error(`Failed to load WASM internal: ${e}`));
+                    };
+                    document.head.appendChild(wasmScript);
+                });
+                try {
+                    const moduleUrl = chrome.runtime.getURL('libs/genai_bundle.mjs');
+                    const module = await import(moduleUrl);
+                    if (module) {
+                        window.genaiModule = module;
+                        resolve();
+                    } else {
+                        throw new Error('Module loaded but contents are missing');
+                    }
+                } catch (importError) {
+                    throw new Error(`Failed to import main module: ${importError.message}`);
+                }
+            } catch (error) {
+                const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+                reject(new Error(`Failed to load GenAI bundle: ${errorMessage}`));
+                }               });
+        }
+
 
     public async initialize(): Promise<void> {
         try {
-            console.log("Initializing application...");
+            this.updateStatus("Starting initialization");
             this.isFirstLoad = true;
-            
-            await mlcEngineService.initializeEngine(this.handleProgressUpdate);
-            
-            this.chatManager = new ChatManager();
+            const script = document.createElement('script');
+            script.type = 'text/javascript';
+            script.textContent = `
+                if (typeof WebAssembly === 'object') {
+                    WebAssembly.compileStreaming = WebAssembly.compileStreaming || 
+                        async function(response) {
+                            const buffer = await response.arrayBuffer();
+                            return WebAssembly.compile(buffer);
+                        };
+                }
+            `;
+            document.head.appendChild(script);
+            await this.loadGenAIBundle();       
+            await this.safeInitialize();
+            if (!this.llmInference) {
+                throw new Error("LLM initialization failed");
+            }
+
+            this.chatManager = new ChatManager(this.llmInference, this.loraModel);
             await this.chatManager.initializeWithContext();
-            
-            this.isLoadingParams = true;
-            console.log("Initialization complete");
+            this.isFirstLoad = false;
+            this.updateStatus("Ready", false);
         } catch (error) {
             console.error("Error initializing PopupManager:", error);
+            this.updateStatus("Initialization failed", false);
             throw error;
+        }
+                                                }
+
+
+    private async initializeLLM(): Promise<void> {
+        try {
+            this.updateStatus('Initializing...');
+            if (!navigator.gpu) {
+                throw new Error('WebGPU not available');
+            }
+            patchWebGPU();
+            if (!window.genaiModule) {
+                throw new Error('GenAI module not loaded');
+            }
+            const { FilesetResolver, LlmInference } = window.genaiModule;
+            const genaiPath = chrome.runtime.getURL('libs');
+            this.updateStatus('Setting up components...');
+            const [adapter, genai, modelBlobUrl] = await Promise.all([
+                navigator.gpu.requestAdapter({
+                    powerPreference: 'high-performance'
+                }),
+                FilesetResolver.forGenAiTasks(genaiPath),
+                this.modelLoader.loadShardedWeights()
+            ]);
+            if (!adapter) {
+                throw new Error('No WebGPU adapter found');
+            }
+
+            const device = await adapter.requestDevice({
+                requiredLimits: {
+                    maxBindGroups: 4,
+                    maxBindingsPerBindGroup: 8,
+                    maxBufferSize: 256 * 1024 * 1024,
+                    maxComputeInvocationsPerWorkgroup: 128,
+                    maxComputeWorkgroupSizeX: 128,
+                    maxComputeWorkgroupSizeY: 128,
+                    maxComputeWorkgroupsPerDimension: 16384,
+                    maxStorageBufferBindingSize: 128 * 1024 * 1024
+                }
+            });
+
+            if (!device) {
+                throw new Error('Failed to create WebGPU device');
+            }
+            this.updateStatus('Initializing LLM...');
+            this.llmInference = await LlmInference.createFromOptions(genai, {
+                baseOptions: {
+                    modelAssetPath: modelBlobUrl,
+                    delegate: {
+                        gpu: {
+                            modelType: 'F16',
+                            allowPrecisionLoss: true,
+                            enableQuantization: true,
+                            cacheMode: 'AGGRESSIVE',
+                            waitType: 'PASSIVE',
+                            preferCache: true,
+                            optimizationHints: {
+                                enableFastMath: true,
+                                preferSmallBuffers: true,
+                                computeUnit: 'GPU_AND_CPU'
+                            }
+                        }
+                    }
+                },
+                maxTokens: 1000,
+                topK: 3,
+                temperature: 0.8,
+                randomSeed: 101,
+                loraRanks: [4, 8, 16, 32],
+                computeSettings: {
+                    numThreads: navigator.hardwareConcurrency || 4,
+                    enableMemoryPlanning: true
+                }
+            });
+            if (!this.llmInference) {
+                throw new Error('LLM creation returned null');
+            }
+            this.updateStatus('Loading LoRA model...');
+            const loraBlobUrl = await this.modelLoader.loadLoraWeights();
+            this.loraModel = await this.llmInference.loadLoraModel(loraBlobUrl);
+            URL.revokeObjectURL(modelBlobUrl);
+            URL.revokeObjectURL(loraBlobUrl);
+            if (window.gc) window.gc();
+            this.updateStatus('Ready', false);
+        } catch (error) {
+            const errorMessage = `Initialization error: ${error.message}`;
+            console.error(errorMessage, error);
+            throw error;
+        }
+                                                    }
+
+
+    private log(message: string) {
+        this.debug.textContent += '\n' + message;
+        console.log(message);
+    }
+
+
+    private addStyles() {
+        const style = document.createElement('style');
+        style.textContent = `
+            .loading {
+                color: #666;
+                animation: pulse 1.5s infinite;
+            }
+            @keyframes pulse {
+                0% { opacity: 0.6; }
+                50% { opacity: 1; }
+                100% { opacity: 0.6; }
+            }
+        `;
+        document.head.appendChild(style);
+    }
+
+
+    private updateStatus(message: string, isLoading = true) {
+        this.status.textContent = `Status: ${message}`;
+        if (isLoading) {
+            this.status.classList.add('loading');
+        } else {
+            this.status.classList.remove('loading');
         }
     }
 
-    private handleProgressUpdate = (report: ProgressReport): void => {
-        chrome.storage.local.get(['modelDownloaded'], (result) => {
-            const isFirstTime = !result.modelDownloaded;
-            if (isFirstTime) {
-                chrome.storage.local.set({ modelDownloaded: true });
-            }
 
-            if (!this.uiManager.getElements().loadingContainer.hasChildNodes()) {
-                this.uiManager.createLoadingUI(isFirstTime);
+    private async safeInitialize(): Promise<void> {
+        const memoryMonitor = setInterval(() => {
+            if ((window.performance as Performance)?.memory) {
+                const memory = (window.performance as Performance).memory;
             }
+        }, 5000);
 
-            this.uiManager.updateProgressBar(report.progress, isFirstTime);
-
-            if (report.progress >= 1.0) {
-                this.uiManager.handleLoadingComplete(() => {
-                    if (this.isLoadingParams) {
-                        this.uiManager.enableInputs();
-                        this.isLoadingParams = false;
-                    }
-                });
+        try {
+            await this.initializeLLM();
+        } catch (error) {
+            if (this.initRetryCount < this.MAX_RETRIES) {
+                this.initRetryCount++;    
+                if (window.gc) window.gc();
+                await new Promise(resolve => setTimeout(resolve, 2000 * this.initRetryCount));
+                await this.safeInitialize();
+            } else {
+                this.updateStatus('Failed to initialize. Please reload the extension.', false);
+                throw error;
             }
-        });
-    };
+        } finally {
+            clearInterval(memoryMonitor);
+        }
+    }
+
+
+    private async handleSubmit(): Promise<void> {
+        if (!this.chatManager || this.isFirstLoad || !this.llmInference) return;
+
+        const message = this.uiManager.getMessage();
+        if (!message.trim()) return;
+
+        this.uiManager.resetForNewMessage();
+        this.updateStatus("Generating response...", true);
+
+        try {
+            await this.chatManager.processUserMessage(
+                message,
+                this.uiManager.updateAnswer.bind(this.uiManager)
+            );
+            this.updateStatus("Ready", false);
+        } catch (error) {
+            console.error("Error processing message:", error);
+            this.updateStatus("Error generating response", false);
+            this.uiManager.updateAnswer("An error occurred while generating the response.");
+        }
+    }
+
+
+    private handleInputKeyup(event: KeyboardEvent): void {
+        const input = event.target as HTMLInputElement;
+        input.value ? this.uiManager.enableInputs() : this.uiManager.disableSubmit();
+        
+        if (event.key === "Enter" && !event.shiftKey) {
+            event.preventDefault();
+            this.handleSubmit();
+        }
+    }
+
 
     private initializeEventListeners(): void {
         const elements = this.uiManager.getElements();
@@ -63,32 +339,9 @@ export class PopupManager {
         elements.copyAnswer.addEventListener("click", () => this.uiManager.copyAnswer());
     }
 
-    private async handleSubmit(): Promise<void> {
-        if (!this.chatManager || this.isFirstLoad) return;
-
-        const message = this.uiManager.getMessage();
-        if (!message.trim()) return;
-
-        this.uiManager.resetForNewMessage();
-
-        await this.chatManager.processUserMessage(
-            message,
-            this.uiManager.updateAnswer.bind(this.uiManager)
-        );
-    }
-
-    private handleInputKeyup(event: KeyboardEvent): void {
-        const input = event.target as HTMLInputElement;
-        input.value ? this.uiManager.enableInputs() : this.uiManager.disableSubmit();
-        
-        if (event.key === "Enter") {
-            event.preventDefault();
-            this.handleSubmit();
-        }
-    }
 }
 
-// Initialize popup when window loads
+
 window.onload = () => {
     const popup = new PopupManager();
     popup.initialize().catch(console.error);

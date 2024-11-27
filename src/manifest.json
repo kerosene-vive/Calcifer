@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Calcifer Nano",
+  "name": "Calcifer",
   "version": "0.1.0",
-  "description": "Chat with your browser",
+  "description": "Scary Monsters and Nice Sprites 🎃",
   "icons": {
     "16": "icons/icon-16.png",
     "32": "icons/icon-32.png",
@@ -10,13 +10,13 @@
     "128": "icons/icon-128.png"
   },
   "content_security_policy": {
-    "extension_pages": "style-src-elem 'self' https://cdnjs.cloudflare.com; font-src 'self' https://cdnjs.cloudflare.com; script-src 'self' 'wasm-unsafe-eval'; default-src 'self' data:; connect-src 'self' data: http://localhost:8000 https://huggingface.co https://cdn-lfs.huggingface.co https://cdn-lfs-us-1.huggingface.co https://raw.githubusercontent.com https://cdn-lfs-us-1.hf.co"
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; style-src-elem 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; font-src 'self' https://cdnjs.cloudflare.com; default-src 'self' data: blob:; connect-src 'self' data: blob: http://localhost:8000 https://huggingface.co https://cdn-lfs.huggingface.co https://cdn-lfs-us-1.huggingface.co https://raw.githubusercontent.com https://cdn-lfs-us-1.hf.co; worker-src 'self'"
   },
   "side_panel": {
     "default_path": "popup.html"
   },
   "action": {
-    "default_title": "Calcifer Nano",
+    "default_title": "Calcifer",
     "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon-16.png",
@@ -36,8 +36,28 @@
     "service_worker": "background.ts",
     "type": "module"
   },
-  "permissions": ["storage", "tabs", "webNavigation",  "scripting", "sidePanel", "activeTab"],
+  "permissions": [
+    "storage",
+    "tabs",
+    "webNavigation",
+    "scripting",
+    "sidePanel",
+    "activeTab"
+  ],
   "host_permissions": [
+    "https://huggingface.co/*",
     "<all_urls>"
+  ],
+  "minimum_chrome_version": "121",
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "libs/genai_bundle.mjs",
+        "libs/genai_wasm_internal.js",
+        "libs/genai_wasm_internal.wasm",
+        "libs/*"
+      ],
+      "matches": ["<all_urls>"]
+    }
   ]
 }

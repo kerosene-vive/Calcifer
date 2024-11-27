@@ -10,9 +10,11 @@ body {
   }
 }
 
+
 .chat-container {
   background: transparent !important;
 }
+
 
 .chat-history {
   flex: 1;
@@ -24,10 +26,12 @@ body {
   margin-top: 0;
 }
 
+
 .message-wrapper {
   width: 100%;
   display: none;
 }
+
 
 .message {
   padding: 1rem;
@@ -36,9 +40,11 @@ body {
   box-sizing: border-box;
 }
 
+
 .assistant-message {
   background-color: var(--bg-secondary);
 }
+
 
 .message-header {
   display: flex;
@@ -48,10 +54,12 @@ body {
   gap: 8px;
 }
 
+
 .timestamp {
   color: var(--text-secondary);
   font-size: 0.875rem;
 }
+
 
 .copy-button {
   background: transparent;
@@ -65,10 +73,12 @@ body {
   display: none;
 }
 
+
 .copy-button:hover {
   background-color: var(--bg-primary);
   display: none;
 }
+
 
 .message-content {
   white-space: pre-wrap;
@@ -76,6 +86,7 @@ body {
   font-size: 0.9375rem;
   line-height: 1.5;
 }
+
 
 .input-area {
   opacity: 0;
@@ -89,14 +100,17 @@ body {
   display: none;
 }
 
+
 .loading-container:not(:empty) ~ .input-area {
   display: none;
 }
+
 
 .loading-container:empty ~ .input-area {
   display: block;
   opacity: 1;
 }
+
 
 .input-container {
   display: flex;
@@ -106,6 +120,7 @@ body {
   border-radius: 0.75rem;
   padding: 0.75rem;
 }
+
 
 .query-input {
   flex: 1;
@@ -120,9 +135,11 @@ body {
   line-height: 1.5;
 }
 
+
 .query-input:focus {
   outline: none;
 }
+
 
 .submit-button {
   background-color: var(--accent-color);
@@ -139,24 +156,29 @@ body {
   order: -1;
 }
 
+
 .submit-button:hover {
   background-color: var(--hover-color);
 }
+
 
 .submit-button:disabled {
   background-color: var(--border-color);
   cursor: not-allowed;
 }
 
+
 .input-footer {
   margin-top: 0.5rem;
   text-align: center;
 }
 
+
 .disclaimer {
   font-size: 0.75rem;
   color: var(--text-secondary);
 }
+
 
 .loading-indicator {
   position: absolute;
@@ -172,6 +194,7 @@ body {
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
 }
 
+
 .spinner {
   width: 16px;
   height: 16px;
@@ -181,28 +204,34 @@ body {
   animation: spin 1s linear infinite;
 }
 
+
 @keyframes spin {
   to {
     transform: rotate(360deg);
   }
 }
 
+
 .chat-history::-webkit-scrollbar {
   width: 8px;
 }
 
+
 .chat-history::-webkit-scrollbar-track {
   background: transparent;
 }
+
 
 .chat-history::-webkit-scrollbar-thumb {
   background-color: var(--border-color);
   border-radius: 4px;
 }
 
+
 .chat-history::-webkit-scrollbar-thumb:hover {
   background-color: var(--text-secondary);
 }
+
 
 .alert {
   background-color: #e3f2fd;
@@ -211,14 +240,17 @@ body {
   margin-bottom: 1rem;
 }
 
+
 .alert h3 {
   margin: 0 0 0.5rem 0;
   font-weight: bold;
 }
 
+
 .progress-stats {
   margin: 1rem 0;
 }
+
 
 .progress-text {
   display: flex;
@@ -227,11 +259,13 @@ body {
   font-size: 0.875rem;
 }
 
+
 .progress-note {
   margin-top: 1rem;
   font-size: 0.75rem;
   color: #666;
 }
+
 
 .init-message {
   display: flex;
@@ -240,16 +274,19 @@ body {
   margin-bottom: 1rem;
 }
 
+
 .loading-progress {
   padding: 1rem;
   transition: opacity 0.5s ease-out;
   opacity: 1;
 }
 
+
 .loading-progress.fade-out {
   opacity: 0;
   pointer-events: none;
 }
+
 
 .progress-bar {
   width: 100%;
@@ -259,12 +296,14 @@ body {
   overflow: hidden;
 }
 
+
 #progress-fill {
   height: 100%;
   background-color: #2196f3;
   transition: width 0.3s ease-out;
   width: 0;
 }
+
 
 @keyframes slideUp {
   from {
@@ -277,9 +316,11 @@ body {
   }
 }
 
+
 .loading-container.removing {
   animation: slideUp 0.5s ease-out forwards;
 }
+
 
 .message-icon {
   animation: float 3s ease-in-out infinite;
@@ -296,6 +337,7 @@ body {
   animation: float 3s ease-in-out infinite, glow 2s ease-in-out;
 }
 
+
 @keyframes float {
   0% {
     transform: translateY(0px);
@@ -308,6 +350,7 @@ body {
   }
 }
 
+
 @keyframes glow {
   0% {
     filter: brightness(1);
@@ -318,4 +361,36 @@ body {
   100% {
     filter: brightness(1);
   }
+}
+
+
+.status {
+  font-size: 12px;
+  color: #666;
+  margin-left: 8px;
+}
+
+
+.status.loading {
+  color: #666;
+  animation: pulse 1.5s infinite;
+}
+
+
+.debug {
+  font-family: monospace;
+  font-size: 12px;
+  padding: 8px;
+  background: #f5f5f5;
+  border-radius: 4px;
+  margin: 8px;
+  white-space: pre-wrap;
+  display: none;
+}
+
+
+@keyframes pulse {
+  0% { opacity: 0.6; }
+  50% { opacity: 1; }
+  100% { opacity: 0.6; }
 }

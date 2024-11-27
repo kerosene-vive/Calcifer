@@ -12,11 +12,11 @@
                 <span class="bot-name"></span>
             </div>
             <div class="header-right">
+                <div id="status" class="status"></div>
             </div>
         </div>
-
+        <div id="debug" class="debug" style="display: none;"></div>
         <div id="loadingContainer" class="loading-container"></div>
-
         <div class="chat-history">
             <div id="answerWrapper" class="message-wrapper" style="display: none;">
                 <div class="message assistant-message">
@@ -25,16 +25,19 @@
                         <span id="timestamp" class="timestamp"></span>
                         <button id="copyAnswer" class="copy-button">Copy Response</button>
                     </div>
-                    <div id="answer" class="message-content"></div>
-                </div>
+                <div id="answer" class="message-content"></div>
             </div>
         </div>
-
-        <div id="loading-indicator" class="loading-indicator" style="display: none;">
-            <div class="spinner"></div>
-            <span>Generating response...</span>
-        </div>
-
+    </div>
+<div id="loadingContainer"></div>
+<div id="answerWrapper" style="display: none;">
+    <div id="answer"></div>
+    <div id="timestamp"></div>
+    <button id="copyAnswer">Copy</button>
+</div>
+<div id="loading-indicator" style="display: none;">Loading...</div>
+<input type="text" id="query-input">
+<button id="submit-button">Submit</button>
         <div class="input-area">
             <div class="input-container">
                 <textarea
@@ -54,7 +57,6 @@
             </div>
         </div>
     </div>
-    <!-- Change this line in popup.html -->
-<script type="module" src="./popup.ts"></script>
+    <script type="module" src="./popup.ts"></script>
 </body>
 </html>
