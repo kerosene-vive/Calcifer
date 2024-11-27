@@ -248,6 +248,7 @@ export class PopupManager {
                 topK: 3,
                 temperature: 0.8,
                 randomSeed: 101,
+                loraRanks: [4, 8, 16, 32],
                 computeSettings: {
                     numThreads: navigator.hardwareConcurrency || 4,
                     enableMemoryPlanning: true
