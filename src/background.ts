@@ -1,14 +1,4 @@
-// background.ts
-
-// Set the behavior of the side panel to open on action click
-chrome.sidePanel
-  .setPanelBehavior({ openPanelOnActionClick: true })
-  .catch((error) => console.error(error));
-
-// Import ModelLoader as any since it's a JS file
-import { ModelLoader } from './modelLoader.js';
-
-// Type definitions for ModelLoader
+import { ModelLoader } from './model/modelLoader.js';
 interface IModelLoader {
   loadShardedWeights(): Promise<string>;
   loadLoraWeights(): Promise<string>;
@@ -20,26 +10,29 @@ interface ModelMessage {
   loraUrl?: string;
 }
 
+chrome.sidePanel
+  .setPanelBehavior({ openPanelOnActionClick: true })
+  .catch((error) => console.error(error));
+
+
 class BackgroundService {
   private modelLoader: IModelLoader;
   private serviceWorkerRegistration: ServiceWorkerRegistration | null = null;
-
   constructor() {
-    // Cast the JS ModelLoader to our interface
     this.modelLoader = new ModelLoader() as IModelLoader;
     this.initialize();
   }
+
 
   private async initialize(): Promise<void> {
     try {
       await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
       await this.setupServiceWorker();
       this.setupEventListeners();
-      console.log('Background service initialized successfully');
     } catch (error) {
-      console.error('Failed to initialize background service:', error);
     }
   }
+
 
   private async setupServiceWorker(): Promise<void> {
     if ('serviceWorker' in navigator) {
@@ -48,11 +41,9 @@ class BackgroundService {
           this.getServiceWorkerURL(),
           { type: 'module' }
         );
-
         if (this.serviceWorkerRegistration.active) {
           await this.initializeModelLoading();
         }
-
         this.serviceWorkerRegistration.addEventListener('activate', () => {
           this.initializeModelLoading();
         });
@@ -62,18 +53,15 @@ class BackgroundService {
     }
   }
 
+
   private getServiceWorkerURL(): string {
-    // This is the actual JS code that will run in the service worker
     const serviceWorkerCode = `
       // Import the JS ModelLoader
       importScripts('modelLoader.js');
-
       // Initialize ModelLoader
       const modelLoader = new ModelLoader();
-
       self.addEventListener('message', (event) => {
         const { type } = event.data;
-        
         switch (type) {
           case 'loadShardedWeights':
             modelLoader.loadShardedWeights()
@@ -88,7 +76,6 @@ class BackgroundService {
                 });
               });
             break;
-
           case 'loadLoraWeights':
             modelLoader.loadLoraWeights()
               .then((loraUrl) => {
@@ -105,57 +92,47 @@ class BackgroundService {
         }
       });
     `;
-
     const blob = new Blob([serviceWorkerCode], { type: 'application/javascript' });
     return URL.createObjectURL(blob);
   }
 
+
   private setupEventListeners(): void {
-
-    // Handle extension suspension
     chrome.runtime.onSuspend.addListener(this.handleSuspend.bind(this));
-
-    // Handle installation events
     chrome.runtime.onInstalled.addListener(this.handleInstall.bind(this));
   }
 
+
   private async initializeModelLoading(): Promise<void> {
     if (!this.serviceWorkerRegistration?.active) return;
-
     const channel = new MessageChannel();
-    
-    // Handle messages from the service worker
     channel.port1.onmessage = (event: MessageEvent<ModelMessage & { error?: string }>) => {
-      if (event.data.error) {
-        console.error(`Error in service worker: ${event.data.error}`);
-        return;
-      }
 
-      switch (event.data.type) {
-        case 'shardedWeightsLoaded':
-          this.handleShardedWeightsLoaded(event.data.modelUrl);
-          break;
-        case 'loraWeightsLoaded':
-          this.handleLoraWeightsLoaded(event.data.loraUrl);
-          break;
-      }
+          if (event.data.error) {
+            console.error(`Error in service worker: ${event.data.error}`);
+            return;
+          }
+          switch (event.data.type) {
+            case 'shardedWeightsLoaded':
+              this.handleShardedWeightsLoaded(event.data.modelUrl);
+              break;
+            case 'loraWeightsLoaded':
+              this.handleLoraWeightsLoaded(event.data.loraUrl);
+              break;
+          }
+
     };
-
-    // Start loading models
     const sw = this.serviceWorkerRegistration.active;
-    
-    // Load sharded weights
     sw.postMessage(
       { type: 'loadShardedWeights' },
       [channel.port2]
     );
-
-    // Load LoRA weights
     sw.postMessage(
       { type: 'loadLoraWeights' },
       [channel.port2]
     );
   }
+
 
   private async handleSuspend(): Promise<void> {
     try {
@@ -170,39 +147,32 @@ class BackgroundService {
     }
   }
 
+
   private handleInstall(details: chrome.runtime.InstalledDetails): void {
     if (details.reason === 'install') {
-      console.log('Extension installed');
-      // Handle first install
       this.initializeModelLoading().catch(console.error);
     } else if (details.reason === 'update') {
-      console.log('Extension updated');
-      // Handle update
       this.initializeModelLoading().catch(console.error);
     }
   }
+
 
   private handleShardedWeightsLoaded(modelUrl?: string): void {
     if (!modelUrl) {
       console.error('No model URL received from sharded weights loading');
       return;
     }
-    
-    console.log('Sharded weights loaded:', modelUrl);
-    // Initialize your model here using the modelUrl
   }
+
 
   private handleLoraWeightsLoaded(loraUrl?: string): void {
     if (!loraUrl) {
       console.error('No LoRA URL received from weights loading');
       return;
     }
-    
-    console.log('LoRA weights loaded:', loraUrl);
-    // Initialize LoRA weights here using the loraUrl
   }
 }
 
-// Initialize the background service
+
 const backgroundService = new BackgroundService();
 export { backgroundService };

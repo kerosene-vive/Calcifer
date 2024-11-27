@@ -1,3 +1,5 @@
+
+
 export class DownloadManager {
     constructor(debug) {
         this.debug = debug;
@@ -7,10 +9,6 @@ export class DownloadManager {
         ));
     }
 
-    log(message) {
-        this.debug.textContent += '\n' + message;
-        console.log(message);
-    }
 
     async downloadSingleShard(shardName, progressCallback) {
         const url = `${this.baseUrl}/${shardName}`;
@@ -18,38 +16,32 @@ export class DownloadManager {
             headers: {
                 'Accept-Encoding': 'gzip, deflate, br'
             }
-        });
-        
+                                            });
         if (!response.ok) {
             throw new Error(`Failed to download ${shardName}: ${response.statusText}`);
         }
-
         const contentLength = parseInt(response.headers.get('content-length') || '0');
         const reader = response.body.getReader();
         const chunks = [];
         let receivedLength = 0;
-
         while (true) {
             const {done, value} = await reader.read();
             if (done) break;
-
             chunks.push(value);
             receivedLength += value.length;
-
             if (progressCallback) {
                 progressCallback(shardName, receivedLength, contentLength);
             }
         }
-
         const allChunks = new Uint8Array(receivedLength);
         let position = 0;
         for (const chunk of chunks) {
             allChunks.set(chunk, position);
             position += chunk.length;
         }
-
         return { name: shardName, buffer: allChunks.buffer };
     }
+
 
     async downloadShards(progressCallback) {
         const shardNames = [
@@ -62,26 +54,20 @@ export class DownloadManager {
             'weights_part007.bin',
             'adaptation_weights.bin'
         ];
-
         const downloadedShards = new Map();
-        
-        // Download in parallel batches
         for (let i = 0; i < shardNames.length; i += this.maxConcurrentDownloads) {
             const batch = shardNames.slice(i, i + this.maxConcurrentDownloads);
-            
             const batchPromises = batch.map(shardName => 
                 this.downloadSingleShard(shardName, progressCallback)
                     .catch(error => {
                         throw new Error(`Failed to download ${shardName}: ${error.message}`);
                     })
             );
-
             const results = await Promise.all(batchPromises);
             results.forEach(({name, buffer}) => downloadedShards.set(name, buffer));
-            
             if (window.gc) window.gc();
         }
-
         return downloadedShards;
     }
+
 }

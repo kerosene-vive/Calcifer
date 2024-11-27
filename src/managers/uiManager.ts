@@ -9,9 +9,9 @@ export interface UIElements {
     loadingContainer: HTMLElement;
 }
 
+
 export class UIManager {
     private elements: UIElements;
-    private lastProgress: number = 0;
     private readonly ANIMATION_DURATION: number = 500;
 
     constructor() {
@@ -26,7 +26,6 @@ export class UIManager {
             loadingContainer: document.getElementById("loadingContainer") as HTMLElement
         };
 
-        // Validate all elements exist
         Object.entries(this.elements).forEach(([key, element]) => {
             if (!element) {
                 throw new Error(`Required UI element not found: ${key}`);
@@ -37,8 +36,8 @@ export class UIManager {
         this.initializeStyles();
     }
 
+
     private initializeStyles(): void {
-        // Add loading animation styles
         const style = document.createElement('style');
         style.textContent = `
             .loading-progress {
@@ -86,6 +85,7 @@ export class UIManager {
         document.head.appendChild(style);
     }
 
+
     public handleLoadingError(message: string): void {
         const errorDiv = document.createElement('div');
         errorDiv.className = 'error-message';
@@ -101,21 +101,6 @@ export class UIManager {
         this.elements.loadingContainer.appendChild(errorDiv);
     }
 
-    public createLoadingUI(isFirstTime: boolean): void {
-        // Your existing createLoadingUI implementation is correct
-    }
-
-    public updateProgressBar(progress: number, isFirstTime: boolean): void {
-        // Your existing updateProgressBar implementation is correct
-    }
-
-    private animateProgress(start: number, end: number, isFirstTime: boolean): void {
-        // Your existing animateProgress implementation is correct
-    }
-
-    private updateProgressText(progress: number, isFirstTime: boolean): void {
-        // Your existing updateProgressText implementation is correct
-    }
 
     public handleLoadingComplete(callback: () => void): void {
         const loadingProgress = document.querySelector('.loading-progress');
@@ -132,26 +117,21 @@ export class UIManager {
                 }, this.ANIMATION_DURATION);
             }, this.ANIMATION_DURATION);
         } else {
-            callback(); // Call callback even if loading UI is not present
+            callback();
         }
     }
 
+
     public updateAnswer(answer: string): void {
-        // Add fade-in animation
         this.elements.answerWrapper.style.opacity = '0';
         this.elements.answerWrapper.style.display = "block";
         this.elements.answer.innerHTML = answer.replace(/\n/g, "<br>");
         this.elements.loadingIndicator.style.display = "none";
         
-        // Trigger reflow
         void this.elements.answerWrapper.offsetHeight;
-        
-        // Fade in
-        this.elements.answerWrapper.style.opacity = '1';
-        this.elements.answerWrapper.style.transition = 'opacity 0.3s ease';
-        
         this.updateTimestamp();
     }
+
 
     public enableInputs(): void {
         this.elements.submitButton.disabled = false;
@@ -159,10 +139,12 @@ export class UIManager {
         this.elements.queryInput.focus();
     }
 
+
     public disableInputs(): void {
         this.elements.submitButton.disabled = true;
         this.elements.queryInput.disabled = true;
     }
+
 
     public updateTimestamp(): void {
         const options: Intl.DateTimeFormatOptions = {
@@ -175,14 +157,15 @@ export class UIManager {
         this.elements.timestamp.innerText = new Date().toLocaleString("en-US", options);
     }
 
+
     public async copyAnswer(): Promise<void> {
         try {
             await navigator.clipboard.writeText(this.elements.answer.textContent || "");
-            console.log("Answer text copied to clipboard");
         } catch (err) {
             console.error("Could not copy text: ", err);
         }
     }
+
 
     public resetForNewMessage(): void {
         this.elements.answer.innerHTML = "";
@@ -190,15 +173,82 @@ export class UIManager {
         this.elements.loadingIndicator.style.display = "block";
     }
 
+
     public disableSubmit(): void {
         this.elements.submitButton.disabled = true;
     }
+
 
     public getMessage(): string {
         return this.elements.queryInput.value;
     }
 
+
     public getElements(): UIElements {
         return this.elements;
     }
+}
+
+
+export function addMessageToUI(content: string, role: 'user' | 'assistant', isUpdating: boolean = false): void {
+    try {
+        const chatHistoryContainer = document.querySelector('.chat-history');
+        if (!chatHistoryContainer) {
+            throw new Error("Chat history container not found");
+        }
+
+        let messageElement: HTMLElement;
+        
+        if (isUpdating) {
+            messageElement = chatHistoryContainer.querySelector('.message-wrapper:last-child') as HTMLElement;
+            if (!messageElement) {
+                messageElement = createMessageElement(content, role);
+                chatHistoryContainer.appendChild(messageElement);
+            } else {
+                const messageContent = messageElement.querySelector('.message-content');
+                if (messageContent) {
+                    messageContent.innerHTML = sanitizeHTML(content);
+                }
+            }
+        } else {
+            messageElement = createMessageElement(content, role);
+            chatHistoryContainer.appendChild(messageElement);
+        }
+
+        const answerWrapper = document.getElementById('answerWrapper');
+        if (answerWrapper) {
+            answerWrapper.style.display = 'block';
+        }
+    } catch (error) {
+        console.error("Error updating UI:", error);
+    }
+}
+
+
+export function createMessageElement(content: string, role: 'user' | 'assistant'): HTMLElement {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'message-wrapper';
+    
+    wrapper.innerHTML = `
+        <div class="message ${role}-message">
+            <div class="message-header">
+                ${role === 'assistant' ? '<img src="/icons/icon-128.png" alt="Bot Icon" class="message-icon" onerror="this.style.display=\'none\'">' : ''}
+                <span class="timestamp">${new Date().toLocaleTimeString()}</span>
+            </div>
+            <div class="message-content">${sanitizeHTML(content)}</div>
+        </div>
+    `;
+    
+    return wrapper;
+}
+
+
+export function sanitizeHTML(text: string): string {
+    return text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;')
+        .replace(/\n/g, '<br>');
 }

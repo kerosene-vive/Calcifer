@@ -1,4 +1,4 @@
-import { ContentExtractor } from './content';
+import { ContentExtractor } from '../content';
 
 export interface TabState {
     tabId: number;
@@ -12,6 +12,7 @@ export interface PageContent {
 
 export type TabChangeCallback = (tabState: TabState, pageContent: PageContent) => Promise<void>;
 
+
 export class TabManager {
     private currentTabId?: number;
     private currentUrl?: string;
@@ -22,20 +23,18 @@ export class TabManager {
         this.debugMode = debugMode;
         this.initialize();
     }
+    
 
     private async initialize(): Promise<void> {
         try {
             await this.setInitialTab();
             this.setupTabListeners();
-            
-            if (this.debugMode) {
-                console.log("TabManager initialized");
-            }
         } catch (error) {
             console.error("Error initializing TabManager:", error);
             throw error;
         }
     }
+
 
     private async setInitialTab(): Promise<void> {
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -46,10 +45,12 @@ export class TabManager {
         }
     }
 
+
     private setupTabListeners(): void {
         chrome.tabs.onActivated.addListener(this.handleTabActivated.bind(this));
         chrome.tabs.onUpdated.addListener(this.handleTabUpdated.bind(this));
     }
+
 
     private async handleTabActivated(activeInfo: chrome.tabs.TabActiveInfo): Promise<void> {
         const tab = await chrome.tabs.get(activeInfo.tabId);
@@ -59,6 +60,7 @@ export class TabManager {
             await this.handleTabChange();
         }
     }
+
 
     private async handleTabUpdated(
         tabId: number, 
@@ -71,6 +73,7 @@ export class TabManager {
             await this.handleTabChange();
         }
     }
+
 
     private async handleTabChange(): Promise<void> {
         if (!this.currentTabId || !this.currentUrl) return;
@@ -102,20 +105,25 @@ export class TabManager {
         }
     }
 
+
     public onTabChange(callback: TabChangeCallback): void {
         this.onTabChangeCallbacks.push(callback);
     }
 
+
     public removeTabChangeListener(callback: TabChangeCallback): void {
         this.onTabChangeCallbacks = this.onTabChangeCallbacks.filter(cb => cb !== callback);
     }
+
 
     public getCurrentTabState(): TabState | undefined {
         if (!this.currentTabId || !this.currentUrl) return undefined;
         return { tabId: this.currentTabId, url: this.currentUrl };
     }
 
+
     public async refreshCurrentTab(): Promise<void> {
         await this.handleTabChange();
     }
+
 }
