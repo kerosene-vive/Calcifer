@@ -9,13 +9,17 @@ export interface UIElements {
     loadingContainer: HTMLElement;
 }
 
-
 export class UIManager {
     private elements: UIElements;
-    private readonly ANIMATION_DURATION: number = 500;
+    private readonly ANIMATION_DURATION = 500;
 
     constructor() {
-        this.elements = {
+        this.elements = this.initializeElements();
+        this.initializeStyles();
+    }
+
+    private initializeElements(): UIElements {
+        const elements = {
             queryInput: document.getElementById("query-input") as HTMLInputElement,
             submitButton: document.getElementById("submit-button") as HTMLButtonElement,
             answerWrapper: document.getElementById("answerWrapper") as HTMLElement,
@@ -26,16 +30,13 @@ export class UIManager {
             loadingContainer: document.getElementById("loadingContainer") as HTMLElement
         };
 
-        Object.entries(this.elements).forEach(([key, element]) => {
-            if (!element) {
-                throw new Error(`Required UI element not found: ${key}`);
-            }
+        Object.entries(elements).forEach(([key, element]) => {
+            if (!element) throw new Error(`Required UI element not found: ${key}`);
         });
 
-        this.elements.submitButton.disabled = true;
-        this.initializeStyles();
+        elements.submitButton.disabled = true;
+        return elements;
     }
-
 
     private initializeStyles(): void {
         const style = document.createElement('style');
@@ -43,18 +44,14 @@ export class UIManager {
             .loading-progress {
                 transition: opacity ${this.ANIMATION_DURATION}ms ease;
             }
-            .loading-progress.fade-out {
-                opacity: 0;
-            }
-            .removing {
-                pointer-events: none;
-            }
+            .loading-progress.fade-out { opacity: 0; }
+            .removing { pointer-events: none; }
             .progress-bar {
                 background: #f0f0f0;
                 border-radius: 4px;
-                overflow: hidden;
                 height: 8px;
                 margin: 10px 0;
+                overflow: hidden;
             }
             #progress-fill {
                 background: #4CAF50;
@@ -64,27 +61,65 @@ export class UIManager {
             }
             .alert {
                 background: #e3f2fd;
-                padding: 15px;
                 border-radius: 4px;
                 margin-bottom: 15px;
+                padding: 15px;
             }
-            .init-message {
-                margin-bottom: 15px;
-            }
+            .init-message { margin-bottom: 15px; }
             .progress-stats {
                 display: flex;
                 justify-content: space-between;
                 margin-bottom: 5px;
             }
             .progress-note {
-                font-size: 0.9em;
                 color: #666;
+                font-size: 0.9em;
                 margin-top: 10px;
+            }
+            .message-wrapper {
+                margin: 10px 0;
+            }
+            .message {
+                border-radius: 8px;
+                padding: 12px;
+            }
+            .user-message {
+                background-color: #f0f2f5;
+                margin-left: 20%;
+            }
+            .assistant-message {
+                background-color: #e3f2fd;
+                margin-right: 20%;
+            }
+            .message-header {
+                align-items: center;
+                display: flex;
+                margin-bottom: 8px;
+            }
+            .message-icon {
+                height: 24px;
+                margin-right: 8px;
+                width: 24px;
+            }
+            .timestamp {
+                color: #666;
+                font-size: 0.8em;
+            }
+            .message-content {
+                line-height: 1.5;
+                white-space: pre-wrap;
             }
         `;
         document.head.appendChild(style);
     }
 
+    public handleLoadingStatus(message: string, isLoading = true): void {
+        const statusElement = document.getElementById('status');
+        if (statusElement) {
+            statusElement.textContent = `Status: ${message}`;
+            statusElement.classList.toggle('loading', isLoading);
+        }
+    }
 
     public handleLoadingError(message: string): void {
         const errorDiv = document.createElement('div');
@@ -101,7 +136,6 @@ export class UIManager {
         this.elements.loadingContainer.appendChild(errorDiv);
     }
 
-
     public handleLoadingComplete(callback: () => void): void {
         const loadingProgress = document.querySelector('.loading-progress');
         if (loadingProgress) {
@@ -110,9 +144,7 @@ export class UIManager {
             setTimeout(() => {
                 this.elements.loadingContainer.classList.add('removing');
                 setTimeout(() => {
-                    if (this.elements.loadingContainer.parentElement) {
-                        this.elements.loadingContainer.parentElement.removeChild(this.elements.loadingContainer);
-                    }
+                    this.elements.loadingContainer.remove();
                     callback();
                 }, this.ANIMATION_DURATION);
             }, this.ANIMATION_DURATION);
@@ -120,7 +152,6 @@ export class UIManager {
             callback();
         }
     }
-
 
     public updateAnswer(answer: string): void {
         this.elements.answerWrapper.style.opacity = '0';
@@ -132,6 +163,57 @@ export class UIManager {
         this.updateTimestamp();
     }
 
+    public addMessageToUI(content: string, role: 'user' | 'assistant', isUpdating = false): void {
+        const chatHistoryContainer = document.querySelector('.chat-history');
+        if (!chatHistoryContainer) throw new Error("Chat history container not found");
+
+        let messageElement: HTMLElement;
+        
+        if (isUpdating) {
+            messageElement = chatHistoryContainer.querySelector('.message-wrapper:last-child') as HTMLElement;
+            if (!messageElement) {
+                messageElement = this.createMessageElement(content, role);
+                chatHistoryContainer.appendChild(messageElement);
+            } else {
+                const messageContent = messageElement.querySelector('.message-content');
+                if (messageContent) {
+                    messageContent.innerHTML = this.sanitizeHTML(content);
+                }
+            }
+        } else {
+            messageElement = this.createMessageElement(content, role);
+            chatHistoryContainer.appendChild(messageElement);
+        }
+
+        this.elements.answerWrapper.style.display = 'block';
+    }
+
+    private createMessageElement(content: string, role: 'user' | 'assistant'): HTMLElement {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'message-wrapper';
+        
+        wrapper.innerHTML = `
+            <div class="message ${role}-message">
+                <div class="message-header">
+                    ${role === 'assistant' ? '<img src="/icons/icon-128.png" alt="Bot Icon" class="message-icon" onerror="this.style.display=\'none\'">' : ''}
+                    <span class="timestamp">${new Date().toLocaleTimeString()}</span>
+                </div>
+                <div class="message-content">${this.sanitizeHTML(content)}</div>
+            </div>
+        `;
+        
+        return wrapper;
+    }
+
+    private sanitizeHTML(text: string): string {
+        return text
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;')
+            .replace(/\n/g, '<br>');
+    }
 
     public enableInputs(): void {
         this.elements.submitButton.disabled = false;
@@ -139,12 +221,10 @@ export class UIManager {
         this.elements.queryInput.focus();
     }
 
-
     public disableInputs(): void {
         this.elements.submitButton.disabled = true;
         this.elements.queryInput.disabled = true;
     }
-
 
     public updateTimestamp(): void {
         const options: Intl.DateTimeFormatOptions = {
@@ -157,7 +237,6 @@ export class UIManager {
         this.elements.timestamp.innerText = new Date().toLocaleString("en-US", options);
     }
 
-
     public async copyAnswer(): Promise<void> {
         try {
             await navigator.clipboard.writeText(this.elements.answer.textContent || "");
@@ -166,89 +245,21 @@ export class UIManager {
         }
     }
 
-
     public resetForNewMessage(): void {
         this.elements.answer.innerHTML = "";
         this.elements.answerWrapper.style.display = "none";
         this.elements.loadingIndicator.style.display = "block";
     }
 
-
     public disableSubmit(): void {
         this.elements.submitButton.disabled = true;
     }
-
 
     public getMessage(): string {
         return this.elements.queryInput.value;
     }
 
-
     public getElements(): UIElements {
         return this.elements;
     }
-}
-
-
-export function addMessageToUI(content: string, role: 'user' | 'assistant', isUpdating: boolean = false): void {
-    try {
-        const chatHistoryContainer = document.querySelector('.chat-history');
-        if (!chatHistoryContainer) {
-            throw new Error("Chat history container not found");
-        }
-
-        let messageElement: HTMLElement;
-        
-        if (isUpdating) {
-            messageElement = chatHistoryContainer.querySelector('.message-wrapper:last-child') as HTMLElement;
-            if (!messageElement) {
-                messageElement = createMessageElement(content, role);
-                chatHistoryContainer.appendChild(messageElement);
-            } else {
-                const messageContent = messageElement.querySelector('.message-content');
-                if (messageContent) {
-                    messageContent.innerHTML = sanitizeHTML(content);
-                }
-            }
-        } else {
-            messageElement = createMessageElement(content, role);
-            chatHistoryContainer.appendChild(messageElement);
-        }
-
-        const answerWrapper = document.getElementById('answerWrapper');
-        if (answerWrapper) {
-            answerWrapper.style.display = 'block';
-        }
-    } catch (error) {
-        console.error("Error updating UI:", error);
-    }
-}
-
-
-export function createMessageElement(content: string, role: 'user' | 'assistant'): HTMLElement {
-    const wrapper = document.createElement('div');
-    wrapper.className = 'message-wrapper';
-    
-    wrapper.innerHTML = `
-        <div class="message ${role}-message">
-            <div class="message-header">
-                ${role === 'assistant' ? '<img src="/icons/icon-128.png" alt="Bot Icon" class="message-icon" onerror="this.style.display=\'none\'">' : ''}
-                <span class="timestamp">${new Date().toLocaleTimeString()}</span>
-            </div>
-            <div class="message-content">${sanitizeHTML(content)}</div>
-        </div>
-    `;
-    
-    return wrapper;
-}
-
-
-export function sanitizeHTML(text: string): string {
-    return text
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#039;')
-        .replace(/\n/g, '<br>');
 }

@@ -1,5 +1,24 @@
 import { ModelLoader } from '../model/modelLoader.js';
 
+declare global {
+    interface Window {
+        ModuleFactory: any;
+        gc?: () => void;
+        genaiModule?: {
+            FilesetResolver: any;
+            LlmInference: any;
+        };
+    }
+}
+
+interface Performance {
+    memory?: {
+        usedJSHeapSize: number;
+        totalJSHeapSize: number;
+        jsHeapSizeLimit: number;
+    };
+}
+
 export class LLMManager {
     private llmInference: any = null;
     private loraModel: any = null;
@@ -7,10 +26,12 @@ export class LLMManager {
     private initRetryCount: number = 0;
     private readonly MAX_RETRIES = 3;
     private modelLoader: ModelLoader;
+    private onStatusUpdate: (message: string, isLoading?: boolean) => void;
 
-    constructor(debugElement: HTMLElement) {
+    constructor(debugElement: HTMLElement, statusCallback: (message: string, isLoading?: boolean) => void) {
         this.debug = debugElement;
         this.modelLoader = new ModelLoader(this.debug);
+        this.onStatusUpdate = statusCallback;
     }
 
     public getLLMInference() {
@@ -19,6 +40,31 @@ export class LLMManager {
 
     public getLoraModel() {
         return this.loraModel;
+    }
+
+    public async initialize(): Promise<void> {
+        await this.setupWebAssembly();
+        await this.loadGenAIBundle();
+        await this.safeInitialize();
+        
+        if (!this.llmInference) {
+            throw new Error("LLM initialization failed");
+        }
+    }
+
+    private async setupWebAssembly(): Promise<void> {
+        const script = document.createElement('script');
+        script.type = 'text/javascript';
+        script.textContent = `
+            if (typeof WebAssembly === 'object') {
+                WebAssembly.compileStreaming = WebAssembly.compileStreaming || 
+                    async function(response) {
+                        const buffer = await response.arrayBuffer();
+                        return WebAssembly.compile(buffer);
+                    };
+            }
+        `;
+        document.head.appendChild(script);
     }
 
     private patchWebGPU(): void {

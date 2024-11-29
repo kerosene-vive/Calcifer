@@ -1,83 +1,51 @@
 import "./popup.css";
-import { ChatManager } from './managers/chatManager.ts';
-import { UIManager } from './managers/uiManager.ts';
-import { LLMManager } from './managers/llmManager.ts';
+import { ChatManager } from './managers/chatManager.js';
+import { UIManager } from './managers/uiManager.js';
+import { LLMManager } from './managers/llmManager.js';
+import { MessageService } from './services/messageService.js';
+import { TabManager } from './managers/tabManager.js';
 
 export class PopupManager {
     private chatManager: ChatManager | null = null;
     private uiManager: UIManager;
     private llmManager: LLMManager;
-    private isFirstLoad: boolean = true;
+    private messageService: MessageService;
+    private isFirstLoad = true;
     private debug: HTMLElement;
-    private status: HTMLElement;
 
     constructor() {
-        this.uiManager = new UIManager();
         this.debug = document.getElementById('debug') || document.createElement('div');
-        this.status = document.getElementById('status') || document.createElement('div');
-        this.llmManager = new LLMManager(this.debug);
+        this.uiManager = new UIManager();
+        this.llmManager = new LLMManager(this.debug, this.handleStatusUpdate.bind(this));
+        this.messageService = new MessageService(this.uiManager.addMessageToUI.bind(this.uiManager));
         this.initializeEventListeners();
-        this.addStyles();
     }
 
     public async initialize(): Promise<void> {
         try {
-            this.updateStatus("Starting initialization");
-            this.isFirstLoad = true;
+            this.handleStatusUpdate("Starting initialization");
+            await this.llmManager.initialize();
+
+            const tabManager = new TabManager();
+            this.chatManager = new ChatManager(
+                this.llmManager.getLLMInference(),
+                this.llmManager.getLoraModel(),
+                this.messageService,
+                tabManager
+            );
             
-            const script = document.createElement('script');
-            script.type = 'text/javascript';
-            script.textContent = `
-                if (typeof WebAssembly === 'object') {
-                    WebAssembly.compileStreaming = WebAssembly.compileStreaming || 
-                        async function(response) {
-                            const buffer = await response.arrayBuffer();
-                            return WebAssembly.compile(buffer);
-                        };
-                }
-            `;
-            document.head.appendChild(script);
-
-            await this.llmManager.loadGenAIBundle();
-            await this.llmManager.safeInitialize();
-
-            const llmInference = this.llmManager.getLLMInference();
-            const loraModel = this.llmManager.getLoraModel();
-
-            if (!llmInference) {
-                throw new Error("LLM initialization failed");
-            }
-
-            this.chatManager = new ChatManager(llmInference, loraModel);
             await this.chatManager.initializeWithContext();
             this.isFirstLoad = false;
-            this.updateStatus("Ready", false);
+            this.handleStatusUpdate("Ready", false);
         } catch (error) {
             console.error("Error initializing PopupManager:", error);
-            this.updateStatus("Initialization failed", false);
+            this.handleStatusUpdate("Initialization failed", false);
             throw error;
         }
     }
 
-    private addStyles() {
-        const style = document.createElement('style');
-        style.textContent = `
-            .loading {
-                color: #666;
-                animation: pulse 1.5s infinite;
-            }
-            @keyframes pulse {
-                0% { opacity: 0.6; }
-                50% { opacity: 1; }
-                100% { opacity: 0.6; }
-            }
-        `;
-        document.head.appendChild(style);
-    }
-
-    private updateStatus(message: string, isLoading = true) {
-        this.status.textContent = `Status: ${message}`;
-        this.status.classList.toggle('loading', isLoading);
+    private handleStatusUpdate(message: string, isLoading = true): void {
+        this.uiManager.handleLoadingStatus(message, isLoading);
     }
 
     private async handleSubmit(): Promise<void> {
@@ -87,18 +55,14 @@ export class PopupManager {
         if (!message.trim()) return;
 
         this.uiManager.resetForNewMessage();
-        this.updateStatus("Generating response...", true);
+        this.handleStatusUpdate("Generating response...", true);
 
         try {
-            await this.chatManager.processUserMessage(
-                message,
-                this.uiManager.updateAnswer.bind(this.uiManager)
-            );
-            this.updateStatus("Ready", false);
+            await this.chatManager.processUserMessage(message);
+            this.handleStatusUpdate("Ready", false);
         } catch (error) {
             console.error("Error processing message:", error);
-            this.updateStatus("Error generating response", false);
-            this.uiManager.updateAnswer("An error occurred while generating the response.");
+            this.handleStatusUpdate("Error generating response", false);
         }
     }
 
@@ -121,6 +85,5 @@ export class PopupManager {
 }
 
 window.onload = () => {
-    const popup = new PopupManager();
-    popup.initialize().catch(console.error);
+    new PopupManager().initialize().catch(console.error);
 };
