@@ -1,11 +1,8 @@
 export interface UIElements {
     queryInput: HTMLInputElement;
-    submitButton: HTMLButtonElement;
     answerWrapper: HTMLElement;
     answer: HTMLElement;
     loadingIndicator: HTMLElement;
-    copyAnswer: HTMLElement;
-    timestamp: HTMLElement;
     loadingContainer: HTMLElement;
 }
 
@@ -21,12 +18,9 @@ export class UIManager {
     private initializeElements(): UIElements {
         const elements = {
             queryInput: document.getElementById("query-input") as HTMLInputElement,
-            submitButton: document.getElementById("submit-button") as HTMLButtonElement,
             answerWrapper: document.getElementById("answerWrapper") as HTMLElement,
             answer: document.getElementById("answer") as HTMLElement,
             loadingIndicator: document.getElementById("loading-indicator") as HTMLElement,
-            copyAnswer: document.getElementById("copyAnswer") as HTMLElement,
-            timestamp: document.getElementById("timestamp") as HTMLElement,
             loadingContainer: document.getElementById("loadingContainer") as HTMLElement
         };
 
@@ -34,7 +28,6 @@ export class UIManager {
             if (!element) throw new Error(`Required UI element not found: ${key}`);
         });
 
-        elements.submitButton.disabled = true;
         return elements;
     }
 
@@ -153,6 +146,7 @@ export class UIManager {
         }
     }
 
+
     public updateAnswer(answer: string): void {
         this.elements.answerWrapper.style.opacity = '0';
         this.elements.answerWrapper.style.display = "block";
@@ -160,15 +154,12 @@ export class UIManager {
         this.elements.loadingIndicator.style.display = "none";
         
         void this.elements.answerWrapper.offsetHeight;
-        this.updateTimestamp();
     }
 
     public addMessageToUI(content: string, role: 'user' | 'assistant', isUpdating = false): void {
         const chatHistoryContainer = document.querySelector('.chat-history');
         if (!chatHistoryContainer) throw new Error("Chat history container not found");
-
         let messageElement: HTMLElement;
-        
         if (isUpdating) {
             messageElement = chatHistoryContainer.querySelector('.message-wrapper:last-child') as HTMLElement;
             if (!messageElement) {
@@ -205,6 +196,7 @@ export class UIManager {
         return wrapper;
     }
 
+
     private sanitizeHTML(text: string): string {
         return text
             .replace(/&/g, '&amp;')
@@ -215,35 +207,17 @@ export class UIManager {
             .replace(/\n/g, '<br>');
     }
 
+
     public enableInputs(): void {
-        this.elements.submitButton.disabled = false;
         this.elements.queryInput.disabled = false;
         this.elements.queryInput.focus();
     }
 
+
     public disableInputs(): void {
-        this.elements.submitButton.disabled = true;
         this.elements.queryInput.disabled = true;
     }
-
-    public updateTimestamp(): void {
-        const options: Intl.DateTimeFormatOptions = {
-            month: "short",
-            day: "2-digit",
-            hour: "2-digit",
-            minute: "2-digit",
-            second: "2-digit",
-        };
-        this.elements.timestamp.innerText = new Date().toLocaleString("en-US", options);
-    }
-
-    public async copyAnswer(): Promise<void> {
-        try {
-            await navigator.clipboard.writeText(this.elements.answer.textContent || "");
-        } catch (err) {
-            console.error("Could not copy text: ", err);
-        }
-    }
+    
 
     public resetForNewMessage(): void {
         this.elements.answer.innerHTML = "";
@@ -251,13 +225,11 @@ export class UIManager {
         this.elements.loadingIndicator.style.display = "block";
     }
 
-    public disableSubmit(): void {
-        this.elements.submitButton.disabled = true;
-    }
 
     public getMessage(): string {
         return this.elements.queryInput.value;
     }
+
 
     public getElements(): UIElements {
         return this.elements;
