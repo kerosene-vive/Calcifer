@@ -1,5 +1,3 @@
-import { ContentExtractor } from '../content';
-
 export interface TabState {
     tabId: number;
     url: string;
@@ -10,7 +8,7 @@ export interface PageContent {
     content: string;
 }
 
-export type TabChangeCallback = (tabState: TabState, pageContent: PageContent) => Promise<void>;
+export type TabChangeCallback = (tabState: TabState) => Promise<void>;
 
 
 export class TabManager {
@@ -32,8 +30,7 @@ export class TabManager {
         } catch (error) {
             console.error("Error initializing TabManager:", error);
             throw error;
-        }
-    }
+        }}
 
 
     private async setInitialTab(): Promise<void> {
@@ -42,14 +39,12 @@ export class TabManager {
             this.currentTabId = tab.id;
             this.currentUrl = tab.url;
             await this.handleTabChange();
-        }
-    }
+        }}
 
 
     private setupTabListeners(): void {
         chrome.tabs.onActivated.addListener(this.handleTabActivated.bind(this));
-        chrome.tabs.onUpdated.addListener(this.handleTabUpdated.bind(this));
-    }
+        chrome.tabs.onUpdated.addListener(this.handleTabUpdated.bind(this));    }
 
 
     private async handleTabActivated(activeInfo: chrome.tabs.TabActiveInfo): Promise<void> {
@@ -58,52 +53,30 @@ export class TabManager {
             this.currentTabId = activeInfo.tabId;
             this.currentUrl = tab.url;
             await this.handleTabChange();
-        }
-    }
+        }}
 
 
     private async handleTabUpdated(
         tabId: number, 
         changeInfo: chrome.tabs.TabChangeInfo, 
-        tab: chrome.tabs.Tab
-    ): Promise<void> {
+        tab: chrome.tabs.Tab): Promise<void> 
+        {
         if (changeInfo.status === 'complete' && tab.active && tab.url !== this.currentUrl) {
             this.currentTabId = tabId;
             this.currentUrl = tab.url;
             await this.handleTabChange();
-        }
-    }
+        }}
 
 
     private async handleTabChange(): Promise<void> {
         if (!this.currentTabId || !this.currentUrl) return;
-
-        try {
-            const pageContent = await ContentExtractor.getPageContent();
-            if (!pageContent) {
-                throw new Error("No content extracted from page");
-            }
-
-            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-            
-            const tabState: TabState = {
+        const tabState: TabState = {
                 tabId: this.currentTabId,
                 url: this.currentUrl
-            };
-
-            const content: PageContent = {
-                title: tab.title || "Untitled Page",
-                content: pageContent
-            };
-
-            await Promise.all(
-                this.onTabChangeCallbacks.map(callback => callback(tabState, content))
-            );
-        } catch (error) {
-            console.error("Error handling tab change:", error);
-            throw error;
-        }
-    }
+                                    };
+        await Promise.all(
+                this.onTabChangeCallbacks.map(callback => callback(tabState))
+            );}
 
 
     public onTabChange(callback: TabChangeCallback): void {

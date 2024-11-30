@@ -4,8 +4,10 @@ import { UIManager } from './managers/uiManager.js';
 import { LLMManager } from './managers/llmManager.js';
 import { MessageService } from './services/messageService.js';
 import { TabManager } from './managers/tabManager.js';
+import { ContentFilterManager } from './managers/contentFilterManager';
 
 export class PopupManager {
+    private contentFilter: ContentFilterManager;
     private chatManager: ChatManager | null = null;
     private uiManager: UIManager;
     private llmManager: LLMManager;
@@ -14,6 +16,8 @@ export class PopupManager {
     private debug: HTMLElement;
 
     constructor() {
+        const tabManager = new TabManager();
+        this.contentFilter = new ContentFilterManager(tabManager);
         this.debug = document.getElementById('debug') || document.createElement('div');
         this.uiManager = new UIManager();
         this.llmManager = new LLMManager(this.debug, this.handleStatusUpdate.bind(this));
@@ -34,7 +38,6 @@ export class PopupManager {
                 tabManager
             );
             
-            await this.chatManager.initializeWithContext();
             this.isFirstLoad = false;
             this.handleStatusUpdate("Ready", false);
         } catch (error) {
@@ -48,38 +51,10 @@ export class PopupManager {
         this.uiManager.handleLoadingStatus(message, isLoading);
     }
 
-    private async handleSubmit(): Promise<void> {
-        if (!this.chatManager || this.isFirstLoad) return;
-
-        const message = this.uiManager.getMessage();
-        if (!message.trim()) return;
-
-        this.uiManager.resetForNewMessage();
-        this.handleStatusUpdate("Generating response...", true);
-
-        try {
-            await this.chatManager.processUserMessage(message);
-            this.handleStatusUpdate("Ready", false);
-        } catch (error) {
-            console.error("Error processing message:", error);
-            this.handleStatusUpdate("Error generating response", false);
-        }
-    }
-
-    private handleInputKeyup(event: KeyboardEvent): void {
-        const input = event.target as HTMLInputElement;
-        input.value ? this.uiManager.enableInputs() : this.uiManager.disableSubmit();
-        
-        if (event.key === "Enter" && !event.shiftKey) {
-            event.preventDefault();
-            this.handleSubmit();
-        }
-    }
+   
 
     private initializeEventListeners(): void {
         const elements = this.uiManager.getElements();
-        elements.queryInput.addEventListener("keyup", this.handleInputKeyup.bind(this));
-        elements.submitButton.addEventListener("click", this.handleSubmit.bind(this));
         elements.copyAnswer.addEventListener("click", () => this.uiManager.copyAnswer());
     }
 }
