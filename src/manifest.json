@@ -28,7 +28,7 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["cleanup.js", "content.js"],
+      "js": ["content.js"],
       "run_at": "document_start"
     }
   ],

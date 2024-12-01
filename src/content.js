@@ -1,216 +1,149 @@
-class ContentFilter {
-  constructor(options = {}) {
-    this.options = {
-      minimumOpacity: 0.08,
-      clutterOpacity: 0.15,
-      lowImportanceOpacity: 0.35,
-      transitionDuration: '0.3s',
-      ...options
-    };
-    
-    this.observer = new MutationObserver(this.handleDOMChanges.bind(this));
-    this.originalStyles = new Map();
-    this.isEnabled = true;
-    
-    // Listen for cleanup messages from the extension
-    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-      if (message.action === 'cleanup') {
-        this.cleanup();
-      } else if (message.action === 'initialize') {
-        this.initialize();
-      }
-    });
+// content.js
 
-    this.initialize();
-  }
+class LinkAnalyzer {
+    constructor() {
+        this.stopWords = new Set([
+            'the', 'be', 'to', 'of', 'and', 'a', 'in', 'that', 'have', 'i',
+            'it', 'for', 'not', 'on', 'with', 'he', 'as', 'you', 'do', 'at',
+            'this', 'but', 'his', 'by', 'from', 'they', 'we', 'say', 'her',
+            'she', 'or', 'an', 'will', 'my', 'one', 'all', 'would', 'there',
+            'their', 'what', 'so', 'up', 'out', 'if', 'about', 'who', 'get',
+            'which', 'go', 'me'
+        ]);
 
-  initialize() {
-    if (!this.isEnabled) return;
-
-    // Add global styles with a specific ID
-    const styleEl = document.createElement('style');
-    styleEl.id = 'content-filter-styles';
-    styleEl.textContent = `
-      [data-filtered] {
-        transition: opacity ${this.options.transitionDuration} ease-in-out !important;
-        pointer-events: none !important;
-      }
-      [data-filtered="clutter"] {
-        opacity: ${Math.max(this.options.clutterOpacity, this.options.minimumOpacity)} !important;
-      }
-      [data-filtered="low-importance"] {
-        opacity: ${Math.max(this.options.lowImportanceOpacity, this.options.minimumOpacity)} !important;
-      }
-    `;
-    document.head.appendChild(styleEl);
-    this.styleElement = styleEl;
-
-    // Start observing DOM changes
-    this.observer.observe(document.body, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-      characterData: true
-    });
-
-    // Setup event listeners
-    this.boundFilterContent = this.filterContent.bind(this);
-    window.addEventListener('load', this.boundFilterContent);
-    window.addEventListener('popstate', this.boundFilterContent);
-    window.addEventListener('pushstate', this.boundFilterContent);
-    window.addEventListener('replacestate', this.boundFilterContent);
-
-    // Initial filtering
-    this.filterContent();
-  }
-
-  handleDOMChanges(mutations) {
-    if (!this.isEnabled) return;
-
-    const significantChange = mutations.some(mutation => 
-      mutation.addedNodes.length > 0 ||
-      (mutation.type === 'attributes' && 
-       mutation.target instanceof Element && 
-       mutation.target.getBoundingClientRect().width > 100)
-    );
-
-    if (significantChange) {
-      this.filterContent();
+        this.domain = window.location.hostname.toLowerCase();
+        this.url = window.location.href.toLowerCase();
+        this.keywords = this.extractPageKeywords();
     }
-  }
 
-  filterContent() {
-    if (!this.isEnabled) return;
+    extractPageKeywords() {
+        const title = document.title;
+        const metaKeywords = document.querySelector('meta[name="keywords"]')?.content || '';
+        const metaDescription = document.querySelector('meta[name="description"]')?.content || '';
+        const h1Text = Array.from(document.querySelectorAll('h1')).map(h => h.textContent || '').join(' ');
+        const h2Text = Array.from(document.querySelectorAll('h2')).map(h => h.textContent || '').join(' ');
 
-    requestAnimationFrame(() => {
-      const elements = Array.from(document.body.querySelectorAll('*'))
-        .filter(el => {
-          const rect = el.getBoundingClientRect();
-          return rect.width >= 100 && rect.height >= 100;
+        const combinedText = `${title} ${metaKeywords} ${metaDescription} ${h1Text} ${h2Text}`.toLowerCase();
+        
+        return combinedText
+            .split(/[\s,.-]+/)
+            .filter(word => word.length > 3)
+            .filter(word => !this.stopWords.has(word))
+            .filter(word => word.match(/^[a-z0-9]+$/));
+    }
+
+    calculateRelevance(link) {
+        let score = 0;
+        const linkText = link.textContent?.toLowerCase() || '';
+        const linkHref = link.href.toLowerCase();
+        const rect = link.getBoundingClientRect();
+
+        // Visibility score (0-3)
+        if (rect.top >= 0 && rect.bottom <= window.innerHeight) {
+            score += 3; // Fully visible
+        } else if (rect.top >= 0 && rect.top <= window.innerHeight) {
+            score += 2; // Partially visible (top)
+        } else if (rect.bottom >= 0 && rect.bottom <= window.innerHeight) {
+            score += 1; // Partially visible (bottom)
+        }
+
+        // Keyword matching (0-5)
+        const textWords = new Set(linkText.split(/\s+/));
+        this.keywords.forEach(keyword => {
+            if (textWords.has(keyword)) score += 2;
+            if (linkHref.includes(keyword)) score += 1;
         });
 
-      elements.forEach(el => {
-        if (this.isClutter(el)) {
-          this.applyFilter(el, 'clutter', this.options.clutterOpacity);
-        } else if (this.shouldHide(el)) {
-          this.applyFilter(el, 'low-importance', this.options.lowImportanceOpacity);
-        } else {
-          this.removeFilter(el);
+        // Link attributes (0-3)
+        if (link.title) score += 1;
+        if (link.hasAttribute('aria-label')) score += 1;
+        if (link.hasAttribute('role')) score += 1;
+
+        // Content quality (0-3)
+        if (linkText.length > 10 && linkText.length < 100) score += 2;
+        if (linkText.match(/^[A-Z]/)) score += 1;
+
+        // Structural importance (0-4)
+        const parentElement = link.parentElement;
+        if (parentElement) {
+            if (parentElement.tagName.match(/^H[1-6]$/)) score += 2;
+            if (parentElement.tagName === 'NAV') score += 1;
+            if (parentElement.tagName === 'MAIN') score += 1;
         }
-      });
-    });
-  }
 
-  applyFilter(el, filterType, opacity) {
-    // Store original styles if not already stored
-    if (!this.originalStyles.has(el)) {
-      this.originalStyles.set(el, {
-        opacity: el.style.opacity || '',
-        visibility: el.style.visibility || '',
-        pointerEvents: el.style.pointerEvents || '',
-        transition: el.style.transition || ''
-      });
+        // Internal/external link (0-2)
+        if (linkHref.includes(this.domain)) {
+            score += 1; // Internal link
+            if (linkHref !== this.url) score += 1; // Not current page
+        }
+
+        return score;
     }
 
-    const finalOpacity = Math.max(opacity, this.options.minimumOpacity);
-    el.style.opacity = finalOpacity;
-    el.style.visibility = 'visible';
-    el.style.pointerEvents = 'none';
-    el.setAttribute('data-filtered', filterType);
-  }
-
-  removeFilter(el) {
-    if (el.hasAttribute('data-filtered')) {
-      const originalStyle = this.originalStyles.get(el);
-      if (originalStyle) {
-        el.style.opacity = originalStyle.opacity;
-        el.style.visibility = originalStyle.visibility;
-        el.style.pointerEvents = originalStyle.pointerEvents;
-        el.style.transition = originalStyle.transition;
-      } else {
-        // Default reset if original styles not found
-        el.style.opacity = '';
-        el.style.visibility = '';
-        el.style.pointerEvents = '';
-        el.style.transition = '';
-      }
-      el.removeAttribute('data-filtered');
-      this.originalStyles.delete(el);
+    analyzeLinks() {
+        return Array.from(document.getElementsByTagName('a'))
+            .filter(link => {
+                try {
+                    return link.href && 
+                           link.href.startsWith('http') && 
+                           !link.href.includes('#') &&
+                           link.offsetParent !== null;
+                } catch {
+                    return false;
+                }
+            })
+            .map(link => ({
+                text: (link.textContent || link.href).trim(),
+                href: link.href,
+                score: this.calculateRelevance(link)
+            }))
+            .filter(link => link.text.length > 0)
+            .sort((a, b) => b.score - a.score)
+            .slice(0, 10);
     }
-  }
-
-  isClutter(el) {
-    const clutterPatterns = [
-      '[id*="ad"]', '[class*="ad"]', '[id*="sponsor"]',
-      'header', 'footer', '[role="banner"]',
-      '[class*="cookie"]', '[class*="popup"]', '[class*="modal"]',
-      'iframe[src*="ad"]', 'iframe[src*="sponsor"]'
-    ];
-    return clutterPatterns.some(pattern => el.matches(pattern)) ||
-      /advert|sponsor|promo|banner/i.test(el.textContent || '');
-  }
-
-  shouldHide(el) {
-    return this.getImportanceScore(el) < 0.3;
-  }
-
-  getImportanceScore(el) {
-    const rect = el.getBoundingClientRect();
-    let score = (rect.width * rect.height) / (window.innerWidth * window.innerHeight);
-    score += el.matches('main, article') ? 0.3 : 0;
-    score += el.querySelector('video, img') ? 0.2 : 0;
-    score += 1 - (rect.top / document.documentElement.scrollHeight);
-    return score;
-  }
-
-  cleanup() {
-    this.isEnabled = false;
-
-    // Disconnect observer
-    if (this.observer) {
-      this.observer.disconnect();
-    }
-
-    // Remove event listeners
-    if (this.boundFilterContent) {
-      window.removeEventListener('load', this.boundFilterContent);
-      window.removeEventListener('popstate', this.boundFilterContent);
-      window.removeEventListener('pushstate', this.boundFilterContent);
-      window.removeEventListener('replacestate', this.boundFilterContent);
-    }
-
-    // Remove style element
-    if (this.styleElement && this.styleElement.parentNode) {
-      this.styleElement.parentNode.removeChild(this.styleElement);
-      this.styleElement = null;
-    }
-
-    // Restore all elements with data-filtered attribute
-    document.querySelectorAll('[data-filtered]').forEach(element => {
-      const originalStyle = this.originalStyles.get(element);
-      if (originalStyle) {
-        element.style.opacity = originalStyle.opacity;
-        element.style.visibility = originalStyle.visibility;
-        element.style.pointerEvents = originalStyle.pointerEvents;
-        element.style.transition = originalStyle.transition;
-      } else {
-        element.style.opacity = '';
-        element.style.visibility = '';
-        element.style.pointerEvents = '';
-        element.style.transition = '';
-      }
-      element.removeAttribute('data-filtered');
-    });
-
-    // Clear stored styles
-    this.originalStyles.clear();
-  }
 }
 
-// Create instance
-const contentFilter = new ContentFilter({
-  minimumOpacity: 0.08,
-  clutterOpacity: 0.15,
-  lowImportanceOpacity: 0.35,
-  transitionDuration: '0.3s'
+// Initialize
+let analyzer = null;
+
+// Message handler
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    try {
+        switch (request.action) {
+            case 'ping':
+                sendResponse({ success: true });
+                break;
+
+            case 'analyzeLinks':
+                if (!analyzer) {
+                    analyzer = new LinkAnalyzer();
+                }
+                const results = analyzer.analyzeLinks();
+                sendResponse({ success: true, links: results });
+                break;
+
+            case 'cleanup':
+                analyzer = null;
+                sendResponse({ success: true });
+                break;
+
+            default:
+                sendResponse({ success: false, error: 'Unknown action' });
+        }
+    } catch (error) {
+        console.error('Error in content script:', error);
+        sendResponse({ 
+            success: false, 
+            error: error instanceof Error ? error.message : 'Unknown error' 
+        });
+    }
+    return true; // Keep channel open for async response
+});
+
+// Notify that content script is ready
+chrome.runtime.sendMessage({ 
+    action: 'contentScriptReady',
+    url: window.location.href 
+}).catch(() => {
+    // Ignore any errors during initialization notification
 });

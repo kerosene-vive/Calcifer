@@ -1,54 +1,89 @@
 import "./popup.css";
-import { ChatManager } from './managers/chatManager.js';
 import { UIManager } from './managers/uiManager.js';
 import { LLMManager } from './managers/llmManager.js';
-import { MessageService } from './services/messageService.js';
-import { TabManager } from './managers/tabManager.js';
-import { ContentFilterManager } from './managers/contentFilterManager';
+
+interface Link {
+    text: string;
+    href: string;
+    score: number;
+}
+
+class LinkAnalyzerManager {
+    public async analyzeCurrentPage(): Promise<Link[]> {
+        return new Promise((resolve, reject) => {
+            chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
+                try {
+                    const tab = tabs[0];
+                    if (!tab.id) {
+                        throw new Error('No active tab found');
+                    }
+
+                    console.log("DEBUG: Starting link analysis for tab:", tab.url);
+
+                    const result = await chrome.scripting.executeScript({
+                        target: { tabId: tab.id },
+                        func: () => {
+                            const links = Array.from(document.getElementsByTagName('a'))
+                                .filter(link => {
+                                    try {
+                                        return link.href && 
+                                               link.href.startsWith('http') && 
+                                               !link.href.includes('#') &&
+                                               link.offsetParent !== null;
+                                    } catch {
+                                        return false;
+                                    }
+                                })
+                                .map(link => ({
+                                    text: (link.textContent || link.href).trim(),
+                                    href: link.href,
+                                    score: 1
+                                }))
+                                .filter(link => link.text.length > 0)
+                                .slice(0, 10);
+                            
+                            console.log("Page context: Found links:", links.length);
+                            return links;
+                        }
+                    });
+
+                    console.log("DEBUG: Script execution result:", result);
+
+                    if (!result || !result[0]) {
+                        throw new Error('Failed to analyze links');
+                    }
+
+                    const links = result[0].result as Link[];
+                    console.log("DEBUG: Processed links:", links);
+                    resolve(links);
+
+                } catch (error) {
+                    console.error("DEBUG: Error during link analysis:", error);
+                    reject(new Error('Could not analyze links. Please make sure you are on a valid webpage.'));
+                }
+            });
+        });
+    }
+}
 
 export class PopupManager {
-    private contentFilter: ContentFilterManager;
-    private chatManager: ChatManager | null = null;
     private uiManager: UIManager;
     private llmManager: LLMManager;
-    private messageService: MessageService;
-    private isFirstLoad = true;
     private debug: HTMLElement;
+    private linkAnalyzer: LinkAnalyzerManager;
     private port: chrome.runtime.Port;
-    private boundCleanup: () => void;
 
     constructor() {
-        // Bind cleanup method once
-        this.boundCleanup = this.cleanup.bind(this);
-        
-        const tabManager = new TabManager();
-        this.contentFilter = new ContentFilterManager(tabManager);
         this.debug = document.getElementById('debug') || document.createElement('div');
         this.uiManager = new UIManager();
         this.llmManager = new LLMManager(this.debug, this.handleStatusUpdate.bind(this));
-        this.messageService = new MessageService(this.uiManager.addMessageToUI.bind(this.uiManager));
-        
-        // Connect to background script
+        this.linkAnalyzer = new LinkAnalyzerManager();
         this.port = chrome.runtime.connect({ name: 'popup' });
-        
         this.setupListeners();
     }
 
     private setupListeners(): void {
-        // Setup UI event listeners
         this.initializeEventListeners();
-        
-        // Setup cleanup listeners
-        window.addEventListener('unload', this.boundCleanup);
-        window.addEventListener('beforeunload', this.boundCleanup);
-        chrome.runtime.onSuspend?.addListener(this.boundCleanup);
-
-        // Listen for port disconnect
-        this.port.onDisconnect.addListener(() => {
-            this.cleanup();
-        });
-
-        // Listen for errors
         this.port.onMessage.addListener((message) => {
             if (message.error) {
                 console.error('Background script error:', message.error);
@@ -57,53 +92,37 @@ export class PopupManager {
         });
     }
 
-    public cleanup(): void {
-        try {
-            // Remove event listeners first
-            window.removeEventListener('unload', this.boundCleanup);
-            window.removeEventListener('beforeunload', this.boundCleanup);
-
-            // Notify content script to cleanup
-            chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-                if (tabs[0]?.id) {
-                    chrome.tabs.sendMessage(tabs[0].id, { action: 'cleanup' })
-                        .catch(err => console.error('Failed to send cleanup message:', err));
-                }
-            });
-
-            // Cleanup managers
-            if (this.contentFilter) {
-                this.contentFilter.cleanup();
-            }
-
-            if (this.chatManager) {
-                this.chatManager.cleanup();
-            }
-
-            // Disconnect port last
-            if (this.port) {
-                this.port.disconnect();
-            }
-
-        } catch (error) {
-            console.error('Error during cleanup:', error);
-        }
-    }
-
     public async initialize(): Promise<void> {
         try {
             this.handleStatusUpdate("Starting initialization");
-            await this.llmManager.initialize();
-
-            const tabManager = new TabManager();
-            this.chatManager = new ChatManager(
-                this.llmManager.getLLMInference(),
-                this.llmManager.getLoraModel(),
-                this.messageService,
-                tabManager
-            );
             
-            this.isFirstLoad = false;
+            await this.llmManager.initialize();
+            
+            try {
+                this.handleStatusUpdate("Analyzing page links");
+                const links = await this.linkAnalyzer.analyzeCurrentPage();
+                console.log("DEBUG: About to display links:", links);
+                
+                // First, display the message in chat using static method
+                const welcomeMessage = "I've analyzed the page and found some relevant links:";
+                UIManager.addMessageToUI(welcomeMessage, 'assistant', this.uiManager.getElements());
+                
+                // Then display the links in the dedicated container
+                this.uiManager.displayLinks(links);
+                
+                // Make sure the link container is visible and styled properly
+                const linkContainer = document.getElementById('link-container');
+                if (linkContainer) {
+                    linkContainer.style.display = 'block';
+                    linkContainer.style.marginTop = '20px';
+                }
+                
+            } catch (error) {
+                console.error("DEBUG: Error in initialize:", error);
+                const errorMessage = error instanceof Error ? error.message : 'Failed to analyze links';
+                UIManager.addMessageToUI(`Error: ${errorMessage}`, 'assistant', this.uiManager.getElements());
+            }
+            
             this.handleStatusUpdate("Ready", false);
         } catch (error) {
             console.error("Error initializing PopupManager:", error);
@@ -121,7 +140,6 @@ export class PopupManager {
     }
 }
 
-// Initialize popup with proper error handling
 const initPopup = async () => {
     let manager: PopupManager | null = null;
     try {
@@ -129,13 +147,9 @@ const initPopup = async () => {
         await manager.initialize();
     } catch (error) {
         console.error('Failed to initialize PopupManager:', error);
-        if (manager) {
-            manager.cleanup();
-        }
     }
 };
 
-// Use DOMContentLoaded instead of load for faster initialization
 document.addEventListener('DOMContentLoaded', () => {
     initPopup().catch(console.error);
 });
