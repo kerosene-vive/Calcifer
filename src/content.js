@@ -1,372 +1,149 @@
-import { isProbablyReaderable, Readability } from '@mozilla/readability';
+// content.js
 
+class LinkAnalyzer {
+    constructor() {
+        this.stopWords = new Set([
+            'the', 'be', 'to', 'of', 'and', 'a', 'in', 'that', 'have', 'i',
+            'it', 'for', 'not', 'on', 'with', 'he', 'as', 'you', 'do', 'at',
+            'this', 'but', 'his', 'by', 'from', 'they', 'we', 'say', 'her',
+            'she', 'or', 'an', 'will', 'my', 'one', 'all', 'would', 'there',
+            'their', 'what', 'so', 'up', 'out', 'if', 'about', 'who', 'get',
+            'which', 'go', 'me'
+        ]);
 
-class ContentExtractor {
-  constructor() {
-    this.DEFAULT_ERROR_MESSAGE = "Unable to extract content from this page.";
-    this.MIN_CONTENT_LENGTH = 100;
-    this.SEARCH_ENGINES = {
-      google: {
-        domain: 'google.com',
-        selectors: [
-          '#search',
-          '#rso',
-          '[role="main"] #center_col',
-          '.g',
-          '.MjjYud'
-        ],
-        unwantedSelectors: [
-          '#botstuff',
-          '#bottomplayer',
-          '#topstuff',
-          '.related-question-pair'
-        ]
-      },
-      bing: {
-        domain: 'bing.com',
-        selectors: ['#b_results', '.b_algo'],
-        unwantedSelectors: ['#b_footer', '#b_header']
-      },
-      duckduckgo: {
-        domain: 'duckduckgo.com',
-        selectors: ['.results', '.result'],
-        unwantedSelectors: ['.badge-link']
-      }
-    };
-    this.setupMessageHandling();
-  }
-
-
-  setupMessageHandling() {
-    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-      if (message.type === 'EXTRACT_CONTENT') {
-        this.extractContent()
-          .then(result => {
-            chrome.runtime.sendMessage({
-              type: 'CONTENT_EXTRACTED',
-              ...result,
-              timestamp: new Date().toISOString()
-            });
-            sendResponse({ success: true });
-          })
-          .catch(error => {
-            const errorResult = {
-              type: 'EXTRACTION_ERROR',
-              content: this.DEFAULT_ERROR_MESSAGE,
-              error: error.message,
-              timestamp: new Date().toISOString()
-            };
-            chrome.runtime.sendMessage(errorResult);
-            sendResponse({ success: false, ...errorResult });
-          });
-        return true;
-      }
-    });
-  }
-
-
-  isSearchEngine(url) {
-    return Object.values(this.SEARCH_ENGINES).some(engine => 
-      url.includes(engine.domain)
-    );
-  }
-
-
-  getSearchEngineConfig(url) {
-    return Object.values(this.SEARCH_ENGINES).find(engine => 
-      url.includes(engine.domain)
-    );
-  }
-
-
-  async waitForDynamicContent(selectors, timeout = 3000) {
-    const startTime = Date.now();
-    
-    while (Date.now() - startTime < timeout) {
-      for (const selector of selectors) {
-        const element = document.querySelector(selector);
-        if (element && element.textContent.trim()) {
-          return true;
-        }
-      }
-      await new Promise(resolve => setTimeout(resolve, 100));
+        this.domain = window.location.hostname.toLowerCase();
+        this.url = window.location.href.toLowerCase();
+        this.keywords = this.extractPageKeywords();
     }
-    return false;
-  }
 
+    extractPageKeywords() {
+        const title = document.title;
+        const metaKeywords = document.querySelector('meta[name="keywords"]')?.content || '';
+        const metaDescription = document.querySelector('meta[name="description"]')?.content || '';
+        const h1Text = Array.from(document.querySelectorAll('h1')).map(h => h.textContent || '').join(' ');
+        const h2Text = Array.from(document.querySelectorAll('h2')).map(h => h.textContent || '').join(' ');
 
-  async extractSearchResults(engineConfig) {
-    try {
-      await this.waitForDynamicContent(engineConfig.selectors);
-      let searchResults = [];
-      for (const selector of engineConfig.selectors) {
-        const elements = document.querySelectorAll(selector);
-        elements.forEach(element => {
-          const elementClone = element.cloneNode(true);
-          engineConfig.unwantedSelectors?.forEach(unwantedSelector => {
-            elementClone.querySelectorAll(unwantedSelector)
-              .forEach(el => el.remove());
-          });
-          const text = this.cleanText(elementClone.textContent);
-          const links = Array.from(elementClone.querySelectorAll('a'))
-            .map(a => ({
-              text: this.cleanText(a.textContent),
-              url: a.href
+        const combinedText = `${title} ${metaKeywords} ${metaDescription} ${h1Text} ${h2Text}`.toLowerCase();
+        
+        return combinedText
+            .split(/[\s,.-]+/)
+            .filter(word => word.length > 3)
+            .filter(word => !this.stopWords.has(word))
+            .filter(word => word.match(/^[a-z0-9]+$/));
+    }
+
+    calculateRelevance(link) {
+        let score = 0;
+        const linkText = link.textContent?.toLowerCase() || '';
+        const linkHref = link.href.toLowerCase();
+        const rect = link.getBoundingClientRect();
+
+        // Visibility score (0-3)
+        if (rect.top >= 0 && rect.bottom <= window.innerHeight) {
+            score += 3; // Fully visible
+        } else if (rect.top >= 0 && rect.top <= window.innerHeight) {
+            score += 2; // Partially visible (top)
+        } else if (rect.bottom >= 0 && rect.bottom <= window.innerHeight) {
+            score += 1; // Partially visible (bottom)
+        }
+
+        // Keyword matching (0-5)
+        const textWords = new Set(linkText.split(/\s+/));
+        this.keywords.forEach(keyword => {
+            if (textWords.has(keyword)) score += 2;
+            if (linkHref.includes(keyword)) score += 1;
+        });
+
+        // Link attributes (0-3)
+        if (link.title) score += 1;
+        if (link.hasAttribute('aria-label')) score += 1;
+        if (link.hasAttribute('role')) score += 1;
+
+        // Content quality (0-3)
+        if (linkText.length > 10 && linkText.length < 100) score += 2;
+        if (linkText.match(/^[A-Z]/)) score += 1;
+
+        // Structural importance (0-4)
+        const parentElement = link.parentElement;
+        if (parentElement) {
+            if (parentElement.tagName.match(/^H[1-6]$/)) score += 2;
+            if (parentElement.tagName === 'NAV') score += 1;
+            if (parentElement.tagName === 'MAIN') score += 1;
+        }
+
+        // Internal/external link (0-2)
+        if (linkHref.includes(this.domain)) {
+            score += 1; // Internal link
+            if (linkHref !== this.url) score += 1; // Not current page
+        }
+
+        return score;
+    }
+
+    analyzeLinks() {
+        return Array.from(document.getElementsByTagName('a'))
+            .filter(link => {
+                try {
+                    return link.href && 
+                           link.href.startsWith('http') && 
+                           !link.href.includes('#') &&
+                           link.offsetParent !== null;
+                } catch {
+                    return false;
+                }
+            })
+            .map(link => ({
+                text: (link.textContent || link.href).trim(),
+                href: link.href,
+                score: this.calculateRelevance(link)
             }))
-            .filter(link => link.text.length > 0);
-
-          if (text.length > 0) {
-            searchResults.push({ text, links });
-          }
-        });
-      }
-      if (searchResults.length > 0) {
-        return searchResults.map(result => 
-          `${result.text}${result.links.length ? '\nRelevant links:\n' + 
-          result.links.map(link => `- ${link.text}: ${link.url}`).join('\n') : ''}`
-        ).join('\n\n');
-      }
-      return null;
-    } catch (error) {
-      return null;
+            .filter(link => link.text.length > 0)
+            .sort((a, b) => b.score - a.score)
+            .slice(0, 10);
     }
-  }
-
-
-  async extractContent() {
-    try {
-      if (document.readyState !== 'complete') {
-        await new Promise(resolve => {
-          const timeout = setTimeout(() => resolve(), 5000);
-          window.addEventListener('load', () => {
-            clearTimeout(timeout);
-            resolve();
-          });
-        });
-      }
-      const url = window.location.href || '';
-      const pageInfo = {
-        url,
-        title: document.title || '',
-        timestamp: new Date().toISOString()
-      };
-      if (this.isSearchEngine(url)) {
-        const engineConfig = this.getSearchEngineConfig(url);
-        const searchContent = await this.extractSearchResults(engineConfig);
-        if (searchContent) {
-          return {
-            ...pageInfo,
-            content: searchContent,
-            extractionMethod: 'search_results'
-          };
-        }
-      }
-      const content = await this.safeExtract();
-      if (!content) {
-        return {
-          ...pageInfo,
-          content: this.DEFAULT_ERROR_MESSAGE,
-          extractionMethod: 'failed'
-        };
-      }
-        return {
-        ...pageInfo,
-          content,
-          extractionMethod: 'success'
-      };
-  }catch (error) {
-        return {
-          url: window.location.href || '',
-          title: document.title || '',
-          content: this.DEFAULT_ERROR_MESSAGE,
-          error: error.message,
-          timestamp: new Date().toISOString(),
-          extractionMethod: 'error'
-        };
-    }
-  }
-
-
-  async safeExtract() {
-    try {
-      await this.waitForDynamicContent(['main', 'article', '#content']);
-
-      const content = await this.tryReadability() || 
-                     await this.tryMainContent() || 
-                     await this.tryDynamicContent() ||
-                     await this.tryBodyContent();
-      return content || this.DEFAULT_ERROR_MESSAGE;
-
-    } catch (error) {
-      return this.DEFAULT_ERROR_MESSAGE;
-    }
-  }
-
-
-  async tryDynamicContent() {
-    try {
-      const dynamicSelectors = [
-        '[data-content]',
-        '[data-component]',
-        '.dynamic-content',
-        '#app',
-        '#root',
-        '.main-content',
-        '[role="main"]'
-      ];
-      for (const selector of dynamicSelectors) {
-        const element = document.querySelector(selector);
-        if (element) {
-          const cleanedContent = this.cleanText(element.textContent || '');
-          const validContent = this.validateContent(cleanedContent);
-          if (validContent) return validContent;
-        }
-      }
-      const textNodes = Array.from(document.body.querySelectorAll('*'))
-        .filter(el => {
-          const text = this.cleanText(el.textContent || '');
-          return text.length > this.MIN_CONTENT_LENGTH;
-        })
-        .sort((a, b) => 
-          (b.textContent?.length || 0) - (a.textContent?.length || 0)
-        );
-
-      if (textNodes.length > 0) {
-        const cleanedContent = this.cleanText(textNodes[0].textContent || '');
-        return this.validateContent(cleanedContent);
-      }
-      return null;
-
-    } catch (error) {
-      return null;
-    }
-  }
-
-
-  async tryReadability() {
-    try {
-      if (!document?.documentElement || !isProbablyReaderable(document)) {
-        return null;
-      }
-      const documentClone = document.cloneNode(true);
-      const reader = new Readability(documentClone);
-      const article = reader.parse();
-      if (!article?.textContent) {
-        return null;
-      }
-      const cleanedContent = this.cleanText(article.textContent);
-      return this.validateContent(cleanedContent);
-    } catch (error) {
-      return null;
-    }
-  }
-
-
-  async tryMainContent() {
-    try {
-      const selectors = [
-        'main',
-        'article',
-        '[role="main"]',
-        '#main-content',
-        '.article-content',
-        '.post-content',
-        '#content',
-        '.content'
-      ];
-      for (const selector of selectors) {
-        const element = document.querySelector(selector);
-        if (element) {
-          const cleanedContent = this.cleanText(element.textContent || '');
-          const validContent = this.validateContent(cleanedContent);
-          if (validContent) return validContent;
-        }
-      }
-      return null;
-    } catch (error) {
-      return null;
-    }
-  }
-
-
-  async tryBodyContent() {
-    try {
-      if (!document?.body) return null;
-      const bodyClone = document.body.cloneNode(true);
-      const unwantedSelectors = [
-        'script', 'style', 'iframe', 'nav', 'header', 'footer',
-        '.ads', '.comments', 'noscript', '[role="complementary"]',
-        '[role="navigation"]', '[role="banner"]', '[role="contentinfo"]',
-        'meta', 'link', '#cookie-banner', '.cookie-notice',
-        '.advertisement', '.social-share', '.related-posts'
-      ];
-      unwantedSelectors.forEach(selector => {
-        try {
-          bodyClone.querySelectorAll(selector).forEach(el => el.remove());
-        } catch (e) {
-        }
-      });
-      const cleanedContent = this.cleanText(bodyClone.textContent || '');
-      return this.validateContent(cleanedContent);
-    } catch (error) {
-      return null;
-    }
-  }
-
-
-  cleanText(text) {
-    if (!text || typeof text !== 'string') return '';
-    return text
-      .replace(/\s+/g, ' ')
-      .replace(/\n\s*\n/g, '\n\n')
-      .replace(/[^\S\r\n]+/g, ' ')
-      .replace(/^\s+|\s+$/g, '')
-      .replace(/\t/g, ' ')
-      .replace(/\u00A0/g, ' ')
-      .replace(/\u200B/g, '')
-      .replace(/^(?:[\t ]*(?:\r?\n|\r))+/, '')
-      .replace(/(?:[\t ]*(?:\r?\n|\r))+$/, '')
-      .trim();
-  }
-
-
-  validateContent(content) {
-    if (!content || typeof content !== 'string') {
-      return null;
-    }
-    const cleaned = this.cleanText(content);
-    if (cleaned.length < this.MIN_CONTENT_LENGTH || cleaned.length > 1000000) {
-      return null;
-    }
-    const words = cleaned.split(/\s+/);
-    const uniqueWords = new Set(words.map(w => w.toLowerCase())); 
-    if (words.length > 50 && uniqueWords.size < words.length * 0.1) {
-      return null;
-    }
-    return cleaned;
-  }
-
-
-  static async getPageContent() {
-    try {
-      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-      const currentTab = tabs[0];
-      if (!currentTab?.id) {
-        return "Unable to access the current tab.";
-      }
-      const [{ result }] = await chrome.scripting.executeScript({
-        target: { tabId: currentTab.id },
-        func: () => {
-          const extractor = new ContentExtractor();
-          return extractor.extractContent();
-        }
-      });
-      return result?.content || "Unable to extract content from this page.";
-    } catch (error) {
-      return "Unable to extract content from this page.";
-    }
-  }
 }
 
-const contentExtractor = new ContentExtractor();
-export { ContentExtractor, contentExtractor };
+// Initialize
+let analyzer = null;
+
+// Message handler
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    try {
+        switch (request.action) {
+            case 'ping':
+                sendResponse({ success: true });
+                break;
+
+            case 'analyzeLinks':
+                if (!analyzer) {
+                    analyzer = new LinkAnalyzer();
+                }
+                const results = analyzer.analyzeLinks();
+                sendResponse({ success: true, links: results });
+                break;
+
+            case 'cleanup':
+                analyzer = null;
+                sendResponse({ success: true });
+                break;
+
+            default:
+                sendResponse({ success: false, error: 'Unknown action' });
+        }
+    } catch (error) {
+        console.error('Error in content script:', error);
+        sendResponse({ 
+            success: false, 
+            error: error instanceof Error ? error.message : 'Unknown error' 
+        });
+    }
+    return true; // Keep channel open for async response
+});
+
+// Notify that content script is ready
+chrome.runtime.sendMessage({ 
+    action: 'contentScriptReady',
+    url: window.location.href 
+}).catch(() => {
+    // Ignore any errors during initialization notification
+});

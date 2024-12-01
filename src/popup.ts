@@ -1,44 +1,128 @@
 import "./popup.css";
-import { ChatManager } from './managers/chatManager.js';
 import { UIManager } from './managers/uiManager.js';
 import { LLMManager } from './managers/llmManager.js';
-import { MessageService } from './services/messageService.js';
 import { TabManager } from './managers/tabManager.js';
 
+interface Link {
+    text: string;
+    href: string;
+    score: number;
+}
+
 export class PopupManager {
-    private chatManager: ChatManager | null = null;
     private uiManager: UIManager;
     private llmManager: LLMManager;
-    private messageService: MessageService;
-    private isFirstLoad = true;
+    private tabManager: TabManager;
     private debug: HTMLElement;
+    private port: chrome.runtime.Port;
+    private initialized: boolean = false;
 
     constructor() {
         this.debug = document.getElementById('debug') || document.createElement('div');
         this.uiManager = new UIManager();
         this.llmManager = new LLMManager(this.debug, this.handleStatusUpdate.bind(this));
-        this.messageService = new MessageService(this.uiManager.addMessageToUI.bind(this.uiManager));
-        this.initializeEventListeners();
+        this.tabManager = TabManager.getInstance();
+        this.port = chrome.runtime.connect({ name: 'popup' });
+        this.setupListeners();
+    }
+
+    private setupListeners(): void {
+        // Global message listener
+        chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+            if (!this.initialized) {
+                console.log("[PopupManager] Waiting for initialization...");
+                return;
+            }
+
+            console.log("[PopupManager] Received message:", message);
+            
+            if (message.type === 'NEW_LINKS' && message.data) {
+                console.log("[PopupManager] Processing new links for:", message.data.url);
+                this.handleNewLinks(message.data.links, message.data.url);
+                return true;
+            }
+        });
+
+        // Tab change listener
+        chrome.tabs.onActivated.addListener(async (activeInfo) => {
+            if (!this.initialized) return;
+            
+            const tab = await chrome.tabs.get(activeInfo.tabId);
+            console.log("[PopupManager] Tab changed:", tab.url);
+            this.refreshLinks();
+        });
+
+        // Tab update listener
+        chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+            if (!this.initialized) return;
+            
+            if (changeInfo.status === 'complete') {
+                console.log("[PopupManager] Tab updated:", tab.url);
+                this.refreshLinks();
+            }
+        });
+    }
+
+    private async refreshLinks(): Promise<void> {
+        try {
+            const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+            if (tabs[0]?.url) {
+                console.log("[PopupManager] Refreshing links for:", tabs[0].url);
+                const links = await this.tabManager.getCurrentPageLinks();
+                this.handleNewLinks(links, tabs[0].url);
+            }
+        } catch (error) {
+            console.error("[PopupManager] Error refreshing links:", error);
+        }
+    }
+
+    private handleNewLinks(links: Link[], url: string): void {
+        console.log("[PopupManager] Handling new links for:", url, links);
+        
+        // Clear previous content
+        const elements = this.uiManager.getElements();
+        if (elements.linkContainer) {
+            elements.linkContainer.innerHTML = '';
+        }
+
+        // Add URL message
+        UIManager.addMessageToUI(
+            `Analyzing links from: ${url}`,
+            'assistant',
+            elements,
+            true
+        );
+
+        // Display links
+        if (links && links.length > 0) {
+            console.log("[PopupManager] Displaying links:", links);
+            this.uiManager.displayLinks(links);
+        } else {
+            UIManager.addMessageToUI(
+                "No relevant links found on this page.",
+                'assistant',
+                elements,
+                true
+            );
+        }
     }
 
     public async initialize(): Promise<void> {
         try {
             this.handleStatusUpdate("Starting initialization");
-            await this.llmManager.initialize();
-
-            const tabManager = new TabManager();
-            this.chatManager = new ChatManager(
-                this.llmManager.getLLMInference(),
-                this.llmManager.getLoraModel(),
-                this.messageService,
-                tabManager
-            );
             
-            await this.chatManager.initializeWithContext();
-            this.isFirstLoad = false;
+            // Initialize LLM
+            await this.llmManager.initialize();
+            
+            // Mark as initialized
+            this.initialized = true;
+            
+            // Get initial links
+            await this.refreshLinks();
+            
             this.handleStatusUpdate("Ready", false);
         } catch (error) {
-            console.error("Error initializing PopupManager:", error);
+            console.error("[PopupManager] Error initializing:", error);
             this.handleStatusUpdate("Initialization failed", false);
             throw error;
         }
@@ -47,43 +131,20 @@ export class PopupManager {
     private handleStatusUpdate(message: string, isLoading = true): void {
         this.uiManager.handleLoadingStatus(message, isLoading);
     }
-
-    private async handleSubmit(): Promise<void> {
-        if (!this.chatManager || this.isFirstLoad) return;
-
-        const message = this.uiManager.getMessage();
-        if (!message.trim()) return;
-
-        this.uiManager.resetForNewMessage();
-        this.handleStatusUpdate("Generating response...", true);
-
-        try {
-            await this.chatManager.processUserMessage(message);
-            this.handleStatusUpdate("Ready", false);
-        } catch (error) {
-            console.error("Error processing message:", error);
-            this.handleStatusUpdate("Error generating response", false);
-        }
-    }
-
-    private handleInputKeyup(event: KeyboardEvent): void {
-        const input = event.target as HTMLInputElement;
-        input.value ? this.uiManager.enableInputs() : this.uiManager.disableSubmit();
-        
-        if (event.key === "Enter" && !event.shiftKey) {
-            event.preventDefault();
-            this.handleSubmit();
-        }
-    }
-
-    private initializeEventListeners(): void {
-        const elements = this.uiManager.getElements();
-        elements.queryInput.addEventListener("keyup", this.handleInputKeyup.bind(this));
-        elements.submitButton.addEventListener("click", this.handleSubmit.bind(this));
-        elements.copyAnswer.addEventListener("click", () => this.uiManager.copyAnswer());
-    }
 }
 
-window.onload = () => {
-    new PopupManager().initialize().catch(console.error);
+const initPopup = async () => {
+    let manager: PopupManager | null = null;
+    try {
+        manager = new PopupManager();
+        await manager.initialize();
+    } catch (error) {
+        console.error('[PopupManager] Failed to initialize:', error);
+    }
 };
+
+// Initialize only after DOM is ready
+document.addEventListener('DOMContentLoaded', () => {
+    console.log("[PopupManager] DOM loaded, initializing...");
+    initPopup().catch(console.error);
+});

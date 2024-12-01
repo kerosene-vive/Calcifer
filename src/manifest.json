@@ -29,7 +29,7 @@
     {
       "matches": ["<all_urls>"],
       "js": ["content.js"],
-      "run_at": "document_end"
+      "run_at": "document_start"
     }
   ],
   "background": {
@@ -55,7 +55,8 @@
         "libs/genai_bundle.mjs",
         "libs/genai_wasm_internal.js",
         "libs/genai_wasm_internal.wasm",
-        "libs/*"
+        "libs/*",
+        "icons/*"
       ],
       "matches": ["<all_urls>"]
     }
