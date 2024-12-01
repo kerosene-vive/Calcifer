@@ -14,7 +14,6 @@ export class UIManager {
 
     constructor() {
         this.elements = this.initializeElements();
-        this.initializeStyles();
     }
 
     private initializeElements(): UIElements {
@@ -52,146 +51,6 @@ export class UIManager {
         return elements;
     }
 
-    private initializeStyles(): void {
-        const style = document.createElement('style');
-        style.textContent = `
-            .chat-history {
-                display: flex;
-                flex-direction: column;
-                gap: 16px;
-                padding: 16px;
-                height: calc(100vh - 180px);
-                overflow-y: auto;
-            }
-            
-            #link-container {
-                display: flex;
-                flex-direction: column;
-                gap: 8px;
-                padding: 16px;
-                background: white;
-                border-radius: 8px;
-                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-            }
-            
-            .link-item {
-                background: #ffffff;
-                border: 1px solid #e0e0e0;
-                border-radius: 4px;
-                padding: 12px;
-                transition: all 0.2s ease;
-                cursor: pointer;
-                position: relative;
-                display: flex;
-                flex-direction: column;
-                gap: 4px;
-            }
-            
-            .link-item:hover {
-                background: #f5f8ff;
-                border-color: #4a90e2;
-                transform: translateY(-1px);
-                box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-            }
-            
-            .link-title {
-                color: #2c3e50;
-                font-size: 14px;
-                font-weight: 500;
-                margin-right: 50px;
-            }
-            
-            .link-url {
-                color: #7f8c8d;
-                font-size: 12px;
-                overflow: hidden;
-                text-overflow: ellipsis;
-                white-space: nowrap;
-            }
-            
-            .link-score {
-                background: #e8f5e9;
-                border-radius: 12px;
-                color: #388e3c;
-                font-size: 12px;
-                padding: 2px 8px;
-                position: absolute;
-                right: 12px;
-                top: 12px;
-            }
-
-            .message-wrapper {
-                margin: 10px 0;
-            }
-
-            .message {
-                border-radius: 8px;
-                padding: 12px;
-            }
-
-            .user-message {
-                background-color: #f0f2f5;
-                margin-left: 20%;
-            }
-
-            .assistant-message {
-                background-color: #e3f2fd;
-                margin-right: 20%;
-            }
-
-            .message-header {
-                align-items: center;
-                display: flex;
-                margin-bottom: 8px;
-            }
-
-            .message-icon {
-                height: 24px;
-                margin-right: 8px;
-                width: 24px;
-            }
-
-            .message-content {
-                line-height: 1.5;
-                white-space: pre-wrap;
-            }
-
-            .timestamp {
-                color: #666;
-                font-size: 0.8em;
-            }
-
-            .loading-progress {
-                transition: opacity ${this.ANIMATION_DURATION}ms ease;
-            }
-
-            .loading-progress.fade-out { 
-                opacity: 0; 
-            }
-
-            .removing { 
-                pointer-events: none; 
-            }
-
-            .alert {
-                background: #e3f2fd;
-                border-radius: 4px;
-                padding: 16px;
-                color: #1976d2;
-                text-align: center;
-            }
-
-            .error-message {
-                background: #ffebee;
-                color: #c62828;
-                padding: 16px;
-                border-radius: 4px;
-                margin: 16px 0;
-            }
-        `;
-        document.head.appendChild(style);
-    }
-
     public handleLoadingStatus(message: string, isLoading = true): void {
         const statusElement = document.getElementById('status');
         if (statusElement) {
@@ -199,8 +58,7 @@ export class UIManager {
             statusElement.classList.toggle('loading', isLoading);
         }
     }
-   
-    
+
     public handleLoadingComplete(callback: () => void): void {
         const loadingProgress = document.querySelector('.loading-progress');
         if (loadingProgress) {
@@ -216,7 +74,6 @@ export class UIManager {
             callback();
         }
     }
-
 
     public static addMessageToUI(content: string, role: 'user' | 'assistant', elements: UIElements, isUpdating = false): void {
         const chatHistoryContainer = document.querySelector('.chat-history');
@@ -242,10 +99,6 @@ export class UIManager {
         elements.answerWrapper.style.display = 'block';
         messageElement.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
-
-    
-
-
 
     public enableInputs(): void {
         this.elements.queryInput.disabled = false;
@@ -337,6 +190,7 @@ export class UIManager {
         this.elements.linkContainer.style.display = 'block';
         this.elements.linkContainer.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
+
     public updateAnswer(answer: string): void {
         this.elements.answerWrapper.style.opacity = '0';
         this.elements.answerWrapper.style.display = "block";
