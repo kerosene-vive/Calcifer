@@ -1,5 +1,5 @@
 // background.ts
-
+chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
 import { ModelLoader } from './model/modelLoader.js';
 
 interface IModelLoader {
