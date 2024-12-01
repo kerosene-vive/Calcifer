@@ -307,36 +307,36 @@ export class UIManager {
             this.elements.linkContainer.appendChild(noLinks);
             return;
         }
-
+    
         const container = document.createElement('div');
         container.className = 'links-wrapper';
-
+    
         links.forEach(link => {
             const linkElement = document.createElement('div');
             linkElement.className = 'link-item';
-            linkElement.dataset.url = link.href;
             
             linkElement.innerHTML = `
                 <div class="link-title">${UIManager.sanitizeHTML(link.text)}</div>
                 <div class="link-url">${UIManager.sanitizeHTML(link.href)}</div>
                 <span class="link-score">Score: ${link.score}</span>
             `;
-
-            linkElement.addEventListener('click', (e) => {
-                e.preventDefault();
-                if (link.href) {
-                    chrome.tabs.create({ url: link.href });
-                }
+    
+            linkElement.addEventListener('click', () => {
+                console.log('Clicking link:', link.href);
+                chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+                    if (tabs[0]?.id) {
+                        chrome.tabs.update(tabs[0].id, { url: link.href });
+                    }
+                });
             });
-
+    
             container.appendChild(linkElement);
         });
-
+    
         this.elements.linkContainer.appendChild(container);
         this.elements.linkContainer.style.display = 'block';
         this.elements.linkContainer.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
-
     public updateAnswer(answer: string): void {
         this.elements.answerWrapper.style.opacity = '0';
         this.elements.answerWrapper.style.display = "block";
