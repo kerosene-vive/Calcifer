@@ -17,38 +17,102 @@ export class UIManager {
     }
 
     private initializeElements(): UIElements {
-        let chatHistory = document.querySelector('.chat-history') as HTMLElement;
-        if (!chatHistory) {
-            chatHistory = document.createElement('div');
-            chatHistory.className = 'chat-history';
-            document.body.appendChild(chatHistory);
-        }
-
         const elements = {
             queryInput: document.getElementById("query-input") as HTMLInputElement,
             answerWrapper: document.getElementById("answerWrapper") as HTMLElement,
             answer: document.getElementById("answer") as HTMLElement,
             loadingIndicator: document.getElementById("loading-indicator") as HTMLElement,
             loadingContainer: document.getElementById("loadingContainer") as HTMLElement,
-            linkContainer: document.getElementById("link-container") as HTMLElement,
-            chatHistory: chatHistory
+            linkContainer: document.createElement('div'),
+            chatHistory: document.querySelector('.chat-history') as HTMLElement,
         };
 
-        if (!elements.linkContainer) {
-            elements.linkContainer = document.createElement('div');
-            elements.linkContainer.id = 'link-container';
-            chatHistory.appendChild(elements.linkContainer);
-        }
+        elements.linkContainer.id = 'link-container';
+        elements.chatHistory.appendChild(elements.linkContainer);
 
-        if (elements.linkContainer.parentElement !== chatHistory) {
-            chatHistory.appendChild(elements.linkContainer);
-        }
+        this.verifyElements(elements);
 
+        return elements;
+    }
+
+    private verifyElements(elements: UIElements): void {
         Object.entries(elements).forEach(([key, element]) => {
             if (!element) throw new Error(`Required UI element not found: ${key}`);
         });
+    }
 
-        return elements;
+    public displayLinks(links: Array<{ text: string; href: string; score: number }>): void {
+        console.log("[UIManager] Displaying links:", links.length);
+
+        const container = this.elements.linkContainer;
+        container.innerHTML = '';
+
+        if (!links?.length) {
+            this.displayNoLinksMessage();
+            return;
+        }
+
+        const linksWrapper = document.createElement('div');
+        linksWrapper.className = 'links-wrapper';
+
+        const sortedLinks = [...links].sort((a, b) => b.score - a.score);
+
+        sortedLinks.forEach(link => {
+            const linkElement = this.createLinkElement(link);
+            linksWrapper.appendChild(linkElement);
+        });
+
+        container.appendChild(linksWrapper);
+        container.style.display = 'block';
+        container.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+
+    private createLinkElement(link: { text: string; href: string; score: number }): HTMLElement {
+        const linkElement = document.createElement('div');
+        linkElement.className = 'link-item';
+
+        const header = document.createElement('div');
+        header.className = 'link-header';
+
+        const title = document.createElement('div');
+        title.className = 'link-title';
+        title.textContent = link.text;
+
+        const score = document.createElement('span');
+        score.className = 'link-score';
+        score.textContent = `${Math.round(link.score * 100)}%`;
+
+        const url = document.createElement('div');
+        url.className = 'link-url';
+        url.textContent = link.href;
+
+        header.appendChild(title);
+        header.appendChild(score);
+        linkElement.appendChild(header);
+        linkElement.appendChild(url);
+
+        linkElement.addEventListener('click', (e) => {
+            e.preventDefault();
+            this.openLink(link.href);
+        });
+
+        return linkElement;
+    }
+
+    private displayNoLinksMessage(): void {
+        const noLinks = document.createElement('div');
+        noLinks.className = 'alert';
+        noLinks.textContent = 'No relevant links found on this page.';
+        this.elements.linkContainer.appendChild(noLinks);
+    }
+
+    private openLink(url: string): void {
+        console.log('[UIManager] Opening link:', url);
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+            if (tabs[0]?.id) {
+                chrome.tabs.update(tabs[0].id, { url });
+            }
+        });
     }
 
     public handleLoadingStatus(message: string, isLoading = true): void {
@@ -59,31 +123,15 @@ export class UIManager {
         }
     }
 
-    public handleLoadingComplete(callback: () => void): void {
-        const loadingProgress = document.querySelector('.loading-progress');
-        if (loadingProgress) {
-            loadingProgress.classList.add('fade-out');
-            setTimeout(() => {
-                this.elements.loadingContainer.classList.add('removing');
-                setTimeout(() => {
-                    this.elements.loadingContainer.remove();
-                    callback();
-                }, this.ANIMATION_DURATION);
-            }, this.ANIMATION_DURATION);
-        } else {
-            callback();
-        }
-    }
-
     public static addMessageToUI(content: string, role: 'user' | 'assistant', elements: UIElements, isUpdating = false): void {
         const chatHistoryContainer = document.querySelector('.chat-history');
         if (!chatHistoryContainer) throw new Error("Chat history container not found");
-        
+
         let messageElement: HTMLElement;
         if (isUpdating) {
             messageElement = chatHistoryContainer.querySelector('.message-wrapper:last-child') as HTMLElement;
             if (!messageElement) {
-                messageElement = this.createMessageElement(content, role, elements);
+                messageElement = this.createMessageElement(content, role);
                 chatHistoryContainer.appendChild(messageElement);
             } else {
                 const messageContent = messageElement.querySelector('.message-content');
@@ -92,7 +140,7 @@ export class UIManager {
                 }
             }
         } else {
-            messageElement = this.createMessageElement(content, role, elements);
+            messageElement = this.createMessageElement(content, role);
             chatHistoryContainer.appendChild(messageElement);
         }
 
@@ -100,30 +148,69 @@ export class UIManager {
         messageElement.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
 
-    public enableInputs(): void {
-        this.elements.queryInput.disabled = false;
-        this.elements.queryInput.focus();
+    private static createMessageElement(content: string, role: 'user' | 'assistant'): HTMLElement {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'message-wrapper';
+
+        const messageContainer = document.createElement('div');
+        messageContainer.className = `message ${role}-message`;
+
+        const header = document.createElement('div');
+        header.className = 'message-header';
+
+        if (role === 'assistant') {
+            const icon = document.createElement('img');
+            icon.src = '/icons/icon-128.png';
+            icon.alt = 'Bot Icon';
+            icon.className = 'message-icon';
+            icon.onerror = () => icon.style.display = 'none';
+            header.appendChild(icon);
+        }
+
+        const timestamp = document.createElement('span');
+        timestamp.className = 'timestamp';
+        timestamp.textContent = new Date().toLocaleTimeString();
+        header.appendChild(timestamp);
+
+        const messageContent = document.createElement('div');
+        messageContent.className = 'message-content';
+        messageContent.innerHTML = this.sanitizeHTML(content);
+
+        messageContainer.appendChild(header);
+        messageContainer.appendChild(messageContent);
+        wrapper.appendChild(messageContainer);
+
+        return wrapper;
     }
 
-    public disableInputs(): void {
-        this.elements.queryInput.disabled = true;
+    public handleLoadingError(message: string): void {
+        const errorDiv = document.createElement('div');
+        errorDiv.className = 'error-message';
+
+        const alert = document.createElement('div');
+        alert.className = 'alert alert-error';
+
+        const title = document.createElement('h3');
+        title.textContent = 'Error';
+
+        const content = document.createElement('p');
+        content.textContent = message;
+
+        const retryButton = document.createElement('button');
+        retryButton.className = 'retry-button';
+        retryButton.textContent = 'Retry';
+        retryButton.onclick = () => location.reload();
+
+        alert.appendChild(title);
+        alert.appendChild(content);
+        alert.appendChild(retryButton);
+        errorDiv.appendChild(alert);
+
+        this.elements.loadingContainer.innerHTML = '';
+        this.elements.loadingContainer.appendChild(errorDiv);
     }
 
-    public resetForNewMessage(): void {
-        this.elements.answer.innerHTML = "";
-        this.elements.answerWrapper.style.display = "none";
-        this.elements.loadingIndicator.style.display = "block";
-    }
-
-    public getMessage(): string {
-        return this.elements.queryInput.value;
-    }
-
-    public getElements(): UIElements {
-        return this.elements;
-    }
-
-    public static sanitizeHTML(text: string): string {
+    private static sanitizeHTML(text: string): string {
         return text
             .replace(/&/g, '&amp;')
             .replace(/</g, '&lt;')
@@ -132,85 +219,7 @@ export class UIManager {
             .replace(/'/g, '&#039;');
     }
 
-    public static createMessageElement(content: string, role: 'user' | 'assistant', elements: UIElements): HTMLElement {
-        const wrapper = document.createElement('div');
-        wrapper.className = 'message-wrapper';
-        
-        wrapper.innerHTML = `
-            <div class="message ${role}-message">
-                <div class="message-header">
-                    ${role === 'assistant' ? '<img src="/icons/icon-128.png" alt="Bot Icon" class="message-icon" onerror="this.style.display=\'none\'">' : ''}
-                    <span class="timestamp">${new Date().toLocaleTimeString()}</span>
-                </div>
-                <div class="message-content">${UIManager.sanitizeHTML(content)}</div>
-            </div>
-        `;
-        return wrapper;
-    }
-
-    public displayLinks(links: Array<{ text: string; href: string; score: number }>): void {
-        console.log("Displaying links:", links);
-        
-        this.elements.linkContainer.innerHTML = '';
-        
-        if (!links || links.length === 0) {
-            const noLinks = document.createElement('div');
-            noLinks.className = 'alert';
-            noLinks.textContent = 'No relevant links found on this page.';
-            this.elements.linkContainer.appendChild(noLinks);
-            return;
-        }
-    
-        const container = document.createElement('div');
-        container.className = 'links-wrapper';
-    
-        links.forEach(link => {
-            const linkElement = document.createElement('div');
-            linkElement.className = 'link-item';
-            
-            linkElement.innerHTML = `
-                <div class="link-title">${UIManager.sanitizeHTML(link.text)}</div>
-                <div class="link-url">${UIManager.sanitizeHTML(link.href)}</div>
-                <span class="link-score">Score: ${link.score}</span>
-            `;
-    
-            linkElement.addEventListener('click', () => {
-                console.log('Clicking link:', link.href);
-                chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-                    if (tabs[0]?.id) {
-                        chrome.tabs.update(tabs[0].id, { url: link.href });
-                    }
-                });
-            });
-    
-            container.appendChild(linkElement);
-        });
-    
-        this.elements.linkContainer.appendChild(container);
-        this.elements.linkContainer.style.display = 'block';
-        this.elements.linkContainer.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    }
-
-    public updateAnswer(answer: string): void {
-        this.elements.answerWrapper.style.opacity = '0';
-        this.elements.answerWrapper.style.display = "block";
-        this.elements.answer.innerHTML = UIManager.sanitizeHTML(answer).replace(/\n/g, "<br>");
-        this.elements.loadingIndicator.style.display = "none";
-        void this.elements.answerWrapper.offsetHeight;
-        this.elements.answerWrapper.style.opacity = '1';
-    }
-
-    public handleLoadingError(message: string): void {
-        const errorDiv = document.createElement('div');
-        errorDiv.className = 'error-message';
-        errorDiv.innerHTML = `
-            <div class="alert alert-error">
-                <h3>Error</h3>
-                <p>${UIManager.sanitizeHTML(message)}</p>
-                <button onclick="location.reload()" class="retry-button">Retry</button>
-            </div>
-        `;
-        this.elements.loadingContainer.innerHTML = '';
-        this.elements.loadingContainer.appendChild(errorDiv);
+    public getElements(): UIElements {
+        return this.elements;
     }
 }

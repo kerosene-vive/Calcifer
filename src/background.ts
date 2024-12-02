@@ -13,18 +13,9 @@ interface ModelMessage {
     loraUrl?: string;
 }
 
-interface Link {
-    text: string;
-    href: string;
-    score: number;
-}
-
 class BackgroundService {
     private modelLoader: IModelLoader;
     private serviceWorkerRegistration: ServiceWorkerRegistration | null = null;
-    private currentTabId: number | null = null;
-    private lastAnalyzedUrl: string = '';
-    private isAnalyzing: boolean = false;
 
     constructor() {
         this.modelLoader = new ModelLoader() as IModelLoader;
@@ -36,13 +27,6 @@ class BackgroundService {
             await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
             await this.setupServiceWorker();
             this.setupEventListeners();
-
-            // Initial tab analysis
-            const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-            if (tabs[0]?.id) {
-                this.currentTabId = tabs[0].id;
-                await this.analyzeLinks(this.currentTabId);
-            }
         } catch (error) {
             console.error("Error initializing background service:", error);
         }
@@ -108,89 +92,9 @@ class BackgroundService {
     }
 
     private setupEventListeners(): void {
-        // Tab and navigation listeners
-        chrome.tabs.onActivated.addListener(async (activeInfo) => {
-            this.currentTabId = activeInfo.tabId;
-            await this.analyzeLinks(this.currentTabId);
-        });
-
-        chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-            if (tabId === this.currentTabId && changeInfo.status === 'complete' && tab.url) {
-                await this.analyzeLinks(tabId);
-            }
-        });
-
-        chrome.webNavigation.onCompleted.addListener(async (details) => {
-            if (details.frameId === 0 && details.tabId === this.currentTabId) {
-                await this.analyzeLinks(details.tabId);
-            }
-        });
-
-        // Extension lifecycle listeners
+        // Extension lifecycle listeners only
         chrome.runtime.onSuspend.addListener(this.handleSuspend.bind(this));
         chrome.runtime.onInstalled.addListener(this.handleInstall.bind(this));
-    }
-
-    private async analyzeLinks(tabId: number): Promise<void> {
-        if (this.isAnalyzing) return;
-        
-        try {
-            this.isAnalyzing = true;
-            console.log("Analyzing links for tab:", tabId);
-
-            const tab = await chrome.tabs.get(tabId);
-            if (!tab.url || tab.url === this.lastAnalyzedUrl) {
-                return;
-            }
-
-            // Wait for page to load
-            await new Promise(resolve => setTimeout(resolve, 500));
-
-            const results = await chrome.scripting.executeScript({
-                target: { tabId },
-                func: () => {
-                    return Array.from(document.getElementsByTagName('a'))
-                        .filter(link => {
-                            try {
-                                return link.href && 
-                                       link.href.startsWith('http') && 
-                                       !link.href.includes('#') &&
-                                       link.offsetParent !== null;
-                            } catch {
-                                return false;
-                            }
-                        })
-                        .map(link => ({
-                            text: (link.textContent || link.href).trim(),
-                            href: link.href,
-                            score: 1
-                        }))
-                        .filter(link => link.text.length > 0)
-                        .slice(0, 10);
-                }
-            });
-
-            if (results && results[0]) {
-                const links = results[0].result as Link[];
-                this.lastAnalyzedUrl = tab.url;
-                
-                // Broadcast results to any open popups
-                chrome.runtime.sendMessage({
-                    type: 'NEW_LINKS',
-                    data: {
-                        links,
-                        url: tab.url
-                    }
-                }).catch(() => {
-                    // Popup might not be open, that's fine
-                    console.log("No popup listening");
-                });
-            }
-        } catch (error) {
-            console.error("Error analyzing links:", error);
-        } finally {
-            this.isAnalyzing = false;
-        }
     }
 
     private async initializeModelLoading(): Promise<void> {

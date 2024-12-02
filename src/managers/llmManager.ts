@@ -1,4 +1,5 @@
 import { ModelLoader } from '../model/modelLoader.js';
+import { LlmInference } from '../libs/genai_bundle.mjs';
 
 declare global {
     interface Window {
@@ -19,8 +20,16 @@ interface Performance {
     };
 }
 
+interface Link {
+    id: number;
+    text: string;
+}
+
 export class LLMManager {
-    private llmInference: any = null;
+    private currentInference: Promise<any> | null = null;
+    private currentRequestId: number | null = null;
+
+    private llmInference: LlmInference
     private loraModel: any = null;
     private debug: HTMLElement;
     private initRetryCount: number = 0;
@@ -238,4 +247,80 @@ export class LLMManager {
             clearInterval(memoryMonitor);
         }
     }
+
+
+    
+    public async getLLMRanking(links: Link[], requestId: number): Promise<number[]> {
+        console.log(`[LLMManager] Starting LLM ranking for request #${requestId}`);
+    
+        // Wait for any ongoing inference to complete
+        if (this.currentInference) {
+          await this.currentInference;
+        }
+    
+        let response = '';
+        let cancelled = false;
+        const prompt = `Rate these webpage links by importance (1-10):
+    ${links.slice(0, 10).map(link => `${link.id}: ${link.text.slice(0, 50)}`).join('\n')}
+    Output format: just IDs in order, most important first.`;
+    
+        try {
+          this.currentRequestId = requestId;
+          this.currentInference = this.streamResponse(
+            prompt,
+            (partial: string) => {
+              if (requestId !== this.currentRequestId) {
+                cancelled = true;
+                console.log(`[LLMManager] Ranking #${requestId} cancelled mid-generation`);
+                return;
+              }
+              response += partial;
+            }
+          );
+          await this.currentInference;
+    
+          if (cancelled || requestId !== this.currentRequestId) {
+            throw new Error('Request cancelled');
+          }
+    
+          // Parse response into ranked IDs
+          const rankedIds = response
+            .split(/[\s,]+/)
+            .map(part => part.trim())
+            .map(part => part.replace(/\D+/g, ''))
+            .filter(part => part.length > 0)
+            .map(id => parseInt(id, 10))
+            .filter(id => !isNaN(id) && id >= 0 && id < links.length);
+    
+          console.log(`[LLMManager] Cleaned ranked IDs for #${requestId}:`, rankedIds);
+          return rankedIds;
+        } catch (error) {
+          console.warn(`[LLMManager] LLM ranking failed for #${requestId}:`, error);
+          return [];
+        } finally {
+          this.currentInference = null;
+        }
+      }
+    
+      private async streamResponse(prompt: string, updateCallback: (text: string) => void): Promise<void> {
+        let fullResponse = '';
+        let textBuffer = '';
+        try {
+          await this.llmInference.generateResponse(
+            prompt,
+            this.loraModel,
+            (partialResult: string, done: boolean) => {
+              textBuffer += partialResult;
+              if (done || textBuffer.length > 1024) {
+                fullResponse += textBuffer;
+                updateCallback(fullResponse);
+                textBuffer = '';
+              }
+            }
+          );
+        } catch (error) {
+          console.error('[LLMManager] Error during streaming response:', error);
+          throw error;
+        }
+      }
 }
