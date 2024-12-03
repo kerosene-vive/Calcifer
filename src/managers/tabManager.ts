@@ -67,54 +67,7 @@ export class TabManager {
         });
     }
 
-    public async analyzeCurrentPage(url: string): Promise<void> {
-        const requestId = ++this.currentRequestId;
-        console.log(`[TabManager] Starting analysis #${requestId} for:`, url);
-
-        const isCurrentRequest = () => requestId === this.currentRequestId;
-
-        try {
-            const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-            const tab = tabs[0];
-
-            if (!tab.id || !isCurrentRequest()) {
-                console.log(`[TabManager] Analysis #${requestId} cancelled - outdated or invalid tab`);
-                return;
-            }
-
-            this.currentTabId = tab.id;
-            const pageContent = await this.fetchPageContent(this.currentTabId);
-            const { pageInfo, links } = this.processPageContent(pageContent);
-
-            if (!isCurrentRequest()) {
-                console.log(`[TabManager] Analysis #${requestId} cancelled - newer request in progress`);
-                return;
-            }
-
-            if (links.length === 0) {
-                console.log(`[TabManager] No links found for request #${requestId}`);
-                const errorMessage = 'No links found';
-                await this.sendMessageToPopup(requestId, [], url, errorMessage);
-                return;
-            }
-
-            await this.rankLinks(links, pageInfo, requestId);
-
-            if (!isCurrentRequest()) {
-                console.log(`[TabManager] Analysis #${requestId} cancelled - rankings outdated`);
-                return;
-            }
-
-            this.lastAnalyzedUrl = url;
-
-            // Send ranked links to the popup
-            console.log(`[TabManager] Broadcasting ${links.length} ranked links for request #${requestId}`);
-            await this.sendMessageToPopup(requestId, links, url);
-        } catch (error) {
-            console.error(`[TabManager] Error in analysis #${requestId}:`, error);
-            await this.sendMessageToPopup(requestId, [], url, error instanceof Error ? error.message : 'Unknown error');
-        }
-    }
+  
 
     private async fetchPageContent(tabId: number): Promise<any> {
         const result = await chrome.scripting.executeScript({
@@ -201,36 +154,109 @@ export class TabManager {
         return { pageInfo, links };
     }
 
+     public async analyzeCurrentPage(url: string): Promise<void> {
+            const requestId = ++this.currentRequestId;
+            console.log(`[TabManager] Starting analysis #${requestId} for:`, url);
     
-    
-    private async rankLinks(links: Link[], pageInfo: PageInfo, requestId: number): Promise<void> {
-        try {
-            const rankedIds = await this.llmManager.getLLMRanking(links, requestId);
-
-            if (rankedIds.length === 0) {
-                // Fallback scoring based on position
-                links.forEach((link, index) => {
-                    link.score = 1 - (index / links.length);
-                });
-            } else {
-                // Score ranked links
-                links.forEach((link, index) => {
-                    const id = rankedIds.indexOf(link.id);
-                    link.score = id !== -1 ? 1 - (id / rankedIds.length) : 0.1 - (index / links.length);
-                });
+            if (!this.shouldAnalyzeUrl(url)) {
+                console.log(`[TabManager] Skipping analysis for ${url}`);
+                return;
             }
-        } catch (error) {
-            console.warn(`[TabManager] Ranking process failed for #${requestId}:`, error);
+    
+            try {
+                const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+                const tab = tabs[0];
+    
+                if (!tab.id || requestId !== this.currentRequestId) return;
+    
+                this.currentTabId = tab.id;
+                const pageContent = await this.fetchPageContent(this.currentTabId);
+                const { pageInfo, links } = this.processPageContent(pageContent);
+    
+                if (requestId !== this.currentRequestId) return;
+    
+                if (links.length === 0) {
+                    await this.sendMessageToPopup(requestId, [], url, 'No links found');
+                    return;
+                }
+    
+                // Start fallback timer
+                const fallbackTimer = setTimeout(() => {
+                    if (requestId === this.currentRequestId) {
+                        this.applyFallbackRanking(links);
+                        this.sendMessageToPopup(requestId, links, url);
+                    }
+                }, 5000);
+    
+                try {
+                    await this.rankLinks(links, pageInfo, requestId);
+                    clearTimeout(fallbackTimer);
+                } catch (error) {
+                    console.warn(`[TabManager] Ranking failed, using fallback:`, error);
+                    this.applyFallbackRanking(links);
+                }
+    
+                if (requestId !== this.currentRequestId) return;
+    
+                this.lastAnalyzedUrl = url;
+                await this.sendMessageToPopup(requestId, links, url);
+    
+            } catch (error) {
+                console.error(`[TabManager] Analysis error:`, error);
+                await this.sendMessageToPopup(requestId, [], url, error instanceof Error ? error.message : 'Unknown error');
+            }
         }
-    }
-
-    private async sendMessageToPopup(requestId: number, links: Link[], url: string, error?: string): Promise<void> {
-        try {
-            await this.popupManager.handleNewLinks(links, url, requestId, error);
-        } catch (error) {
-            console.log(`[TabManager] Could not send to popup (request #${requestId}):`, error);
+    
+     private shouldAnalyzeUrl(url: string): boolean {
+            try {
+                const urlObj = new URL(url);
+                return urlObj.protocol === 'http:' || urlObj.protocol === 'https:';
+            } catch {
+                return false;
+            }
         }
-    }
+    
+     private applyFallbackRanking(links: Link[]): void {
+            links.forEach((link, index) => {
+                let score = 0;
+                
+                // Position scoring
+                if (link.context.position.isVisible) score += 0.3;
+                if (link.context.position.top < 500) score += 0.2;
+                
+                // Context scoring
+                if (link.context.isInHeading) score += 0.25;
+                if (link.context.isInMain) score += 0.15;
+                if (!link.context.isInNav) score += 0.1;
+                
+                // Content scoring
+                if (link.text.length > 10) score += 0.1;
+                if (link.context.surrounding.length > 50) score += 0.1;
+                
+                link.score = score;
+            });
+            
+            links.sort((a, b) => b.score - a.score);
+        }
+    
+        private async rankLinks(links: Link[], pageInfo: PageInfo, requestId: number): Promise<void> {
+            const rankedIds = await this.llmManager.getLLMRanking(links, requestId);
+            
+            links.forEach((link, index) => {
+                const rankIndex = rankedIds.indexOf(link.id);
+                link.score = rankIndex !== -1 ? 1 - (rankIndex / rankedIds.length) : 0;
+            });
+            
+            links.sort((a, b) => b.score - a.score);
+        }
+    
+        private async sendMessageToPopup(requestId: number, links: Link[], url: string, error?: string): Promise<void> {
+            try {
+                await this.popupManager.handleNewLinks(links, url, requestId, error);
+            } catch (error) {
+                console.log(`[TabManager] Popup update failed:`, error);
+            }
+        }
 
    
 }

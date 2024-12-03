@@ -17,6 +17,7 @@ export class PopupManager {
     private debug: HTMLElement;
     private initialized: boolean = false;
     private activeTab: chrome.tabs.Tab | null = null;
+    private currentRequestId: number | null = null;
 
     constructor() {
         this.debug = document.getElementById('debug') || document.createElement('div');
@@ -28,130 +29,124 @@ export class PopupManager {
 
     private setupListeners(): void {
         chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-            console.log("[PopupManager] Received message:", {
-                type: message.type,
-                dataPresent: !!message.data,
-                url: message.data?.url,
-                linksCount: message.data?.links?.length
-            });
+            if (!this.initialized) return false;
 
-            if (!this.initialized) {
-                console.log("[PopupManager] Not initialized yet, ignoring message");
-                return false;
+            switch (message.type) {
+                case 'NEW_LINKS':
+                    this.handleNewLinks(
+                        message.data?.links, 
+                        message.data?.url, 
+                        message.data?.requestId, 
+                        message.data?.error
+                    );
+                    break;
+                case 'PARTIAL_LINKS_UPDATE':
+                    this.handlePartialUpdate(message.links, message.requestId);
+                    break;
             }
-
-            if (message.type === 'NEW_LINKS' && message.data) {
-                this.handleNewLinks(message.data.links, message.data.url, message.data.requestId, message.data.error);
-            }
-
             return false;
         });
     }
+
+    private handlePartialUpdate(links: Link[], requestId: number): void {
+        if (requestId !== this.currentRequestId) return;
+        
+        const sortedLinks = [...links].filter(link => link.score > 0)
+            .sort((a, b) => b.score - a.score);
+            
+        if (sortedLinks.length > 0) {
+            this.uiManager.displayLinks(sortedLinks);
+            this.handleStatusUpdate("Analyzing links...", true);
+        }
+    }
     
-    public async handleNewLinks(links: Array<{ text: string; href: string; score: number }>, url: string, requestId: number, error?: string): Promise<void> {
-        console.log("[PopupManager] Handling new links:", {
-            count: links.length,
-            url,
-            requestId
+    public async handleNewLinks(
+        links: Array<{ text: string; href: string; score: number }>, 
+        url: string, 
+        requestId: number, 
+        error?: string
+    ): Promise<void> {
+        console.log("[PopupManager] Handling links:", {
+            count: links?.length,
+            requestId,
+            error
         });
 
-        try {
-            if (error) {
-                console.error("[PopupManager] Error received:", error);
-                this.handleStatusUpdate(`Error: ${error}`, false);
-                return;
-            }
+        this.currentRequestId = requestId;
 
-            if (!links?.length) {
-                console.log("[PopupManager] No links to display");
-                this.handleStatusUpdate("No links found", false);
-                this.uiManager.displayLinks([]);
-                return;
-            }
+        if (error) {
+            this.uiManager.handleLoadingError(error);
+            this.handleStatusUpdate(error, false);
+            return;
+        }
 
-            const sortedLinks = [...links].sort((a, b) => b.score - a.score);
+        if (!links?.length) {
+            this.uiManager.displayLinks([]);
+            this.handleStatusUpdate("No links found", false);
+            return;
+        }
 
-            console.log("[PopupManager] Top ranked links:",
-                sortedLinks.slice(0, 3).map(l => ({
-                    text: l.text.substring(0, 30),
-                    score: l.score
-                }))
-            );
+        const sortedLinks = [...links]
+            .sort((a, b) => b.score - a.score)
+            .filter(link => link.score > 0);
 
+        if (sortedLinks.length > 0) {
             this.uiManager.displayLinks(sortedLinks);
             this.handleStatusUpdate("Analysis complete", false);
-        } catch (error) {
-            console.error("[PopupManager] Error displaying links:", error);
-            this.handleStatusUpdate("Error displaying links", false);
+        } else {
+            this.uiManager.displayLinks([]);
+            this.handleStatusUpdate("No relevant links found", false);
         }
     }
 
     private async updateUIForTab(tab: chrome.tabs.Tab): Promise<void> {
         if (!tab.url) return;
-
-        this.handleStatusUpdate("Analyzing page...", true);
         
-        // Clear existing links while we wait
-        const elements = this.uiManager.getElements();
-        elements.linkContainer.innerHTML = '';
+        this.uiManager.getElements().linkContainer.innerHTML = '';
+        this.handleStatusUpdate("Analyzing page...", true);
 
         try {
             await this.tabManager.analyzeCurrentPage(tab.url);
         } catch (error) {
-            console.error("[PopupManager] Error analyzing page:", error);
-            this.handleStatusUpdate("Error analyzing page", false);
+            const message = error instanceof Error ? error.message : 'Unknown error';
+            this.uiManager.handleLoadingError(message);
+            this.handleStatusUpdate(message, false);
         }
     }
 
     public async initialize(): Promise<void> {
         try {
-            this.handleStatusUpdate("Initializing LLM...");
+            this.handleStatusUpdate("Initializing...", true);
             await this.llmManager.initialize();
             
-            const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-            const currentTab = tabs[0];
-            
-            if (!currentTab?.url) {
-                throw new Error("No active tab found");
-            }
+            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            if (!tab?.url) throw new Error("No active tab found");
 
-            this.activeTab = currentTab;
+            this.activeTab = tab;
             this.initialized = true;
-            this.handleStatusUpdate("Analyzing current page...");
-
-            console.log("[PopupManager] Starting initial analysis for:", currentTab.url);
-            await this.updateUIForTab(currentTab);
+            await this.updateUIForTab(tab);
 
         } catch (error) {
-            console.error("[PopupManager] Initialization error:", error);
-            this.handleStatusUpdate(`Error: ${error instanceof Error ? error.message : String(error)}`, false);
+            const message = error instanceof Error ? error.message : String(error);
+            this.uiManager.handleLoadingError(message);
             throw error;
         }
     }
 
     private handleStatusUpdate(message: string, isLoading = true): void {
-        console.log("[PopupManager] Status Update:", message, isLoading);
         this.uiManager.handleLoadingStatus(message, isLoading);
     }
 }
 
-// Initialize popup
-document.addEventListener('DOMContentLoaded', () => {
-    console.log("[PopupManager] DOM loaded, initializing...");
-    
-    const initPopup = async () => {
-        try {
-            const manager = new PopupManager();
-            await manager.initialize();
-        } catch (error) {
-            console.error('[PopupManager] Failed to initialize:', error);
-            const debug = document.getElementById('debug');
-            if (debug) {
-                const message = error instanceof Error ? error.message : String(error);
-                debug.textContent = `Error initializing: ${message}`;
-            }
+document.addEventListener('DOMContentLoaded', async () => {
+    try {
+        const manager = new PopupManager();
+        await manager.initialize();
+    } catch (error) {
+        console.error('[PopupManager] Failed to initialize:', error);
+        const debug = document.getElementById('debug');
+        if (debug) {
+            debug.textContent = `Error: ${error instanceof Error ? error.message : String(error)}`;
         }
-    };
-
-    initPopup().catch(console.error);
+    }
 });

@@ -23,13 +23,24 @@ interface Performance {
 interface Link {
     id: number;
     text: string;
+    context?: {
+        surrounding?: string;
+        isInHeading?: boolean;
+        isInMain?: boolean;
+        isInNav?: boolean;
+        position?: {
+            isVisible?: boolean;
+            top?: number;
+        };
+        score?: number;
+    };
 }
 
 export class LLMManager {
     private currentInference: Promise<any> | null = null;
     private currentRequestId: number | null = null;
 
-    private llmInference: LlmInference
+    private llmInference!: LlmInference;
     private loraModel: any = null;
     private debug: HTMLElement;
     private initRetryCount: number = 0;
@@ -251,56 +262,130 @@ export class LLMManager {
 
     
     public async getLLMRanking(links: Link[], requestId: number): Promise<number[]> {
-        console.log(`[LLMManager] Starting LLM ranking for request #${requestId}`);
-    
-        // Wait for any ongoing inference to complete
         if (this.currentInference) {
-          await this.currentInference;
+            await this.currentInference;
         }
     
-        let response = '';
-        let cancelled = false;
-        const prompt = `Rate these webpage links by importance (1-10):
-    ${links.slice(0, 10).map(link => `${link.id}: ${link.text.slice(0, 50)}`).join('\n')}
-    Output format: just IDs in order, most important first.`;
+        const prompt = `Rank these webpage links by importance (1-10), returning IDs as you analyze each one.
+    Links to rank:
+    ${links.slice(0, 10).map(link => {
+        const context = link.context?.surrounding?.slice(0, 100) || '';
+        const location = link.context?.isInHeading ? '[heading]' : 
+                        link.context?.isInMain ? '[main]' : '';
+        return `${link.id}: ${link.text} ${location}\nContext: ${context}\n`;
+    }).join('\n')}
+    
+    Return rankings immediately as: ID:RANK (e.g. "5:9")`;
+    
+        const rankings = new Map<number, number>();
+        let currentPartialResponse = '';
+        let fallbackUsed = false;
     
         try {
-          this.currentRequestId = requestId;
-          this.currentInference = this.streamResponse(
-            prompt,
-            (partial: string) => {
-              if (requestId !== this.currentRequestId) {
-                cancelled = true;
-                console.log(`[LLMManager] Ranking #${requestId} cancelled mid-generation`);
-                return;
-              }
-              response += partial;
+            this.currentRequestId = requestId;
+            
+            // Start fallback timer
+            const fallbackTimeout = setTimeout(() => {
+                if (rankings.size === 0) {
+                    fallbackUsed = true;
+                    const fallbackRanks = this.getFallbackRanking(links);
+                    fallbackRanks.forEach((id, index) => {
+                        const rank = Math.max(1, Math.floor((1 - index / fallbackRanks.length) * 10));
+                        this.updateLinkRanking(links, id, rank, requestId);
+                    });
+                }
+            }, 5000);
+    
+            this.currentInference = this.streamResponse(prompt, (partial) => {
+                if (requestId !== this.currentRequestId || fallbackUsed) return;
+                
+                currentPartialResponse += partial;
+                const matches = currentPartialResponse.matchAll(/(\d+):(\d+)/g);
+                
+                for (const match of matches) {
+                    const id = parseInt(match[1]);
+                    const rank = parseInt(match[2]);
+                    if (!isNaN(id) && !isNaN(rank) && id < links.length && rank >= 1 && rank <= 10) {
+                        rankings.set(id, rank);
+                        this.updateLinkRanking(links, id, rank, requestId);
+                    }
+                }
+                
+                // Keep only last incomplete line
+                currentPartialResponse = currentPartialResponse.split('\n').pop() || '';
+            });
+            await this.currentInference;
+            clearTimeout(fallbackTimeout);
+    
+            // Fill missing ranks with fallback if needed
+            if (rankings.size < links.length && !fallbackUsed) {
+                const remainingLinks = links.filter(link => !rankings.has(link.id));
+                const fallbackRanks = this.getFallbackRanking(remainingLinks);
+                fallbackRanks.forEach((id, index) => {
+                    const rank = Math.max(1, Math.floor((1 - index / fallbackRanks.length) * 10));
+                    this.updateLinkRanking(links, id, rank, requestId);
+                });
             }
-          );
-          await this.currentInference;
     
-          if (cancelled || requestId !== this.currentRequestId) {
-            throw new Error('Request cancelled');
-          }
-    
-          // Parse response into ranked IDs
-          const rankedIds = response
-            .split(/[\s,]+/)
-            .map(part => part.trim())
-            .map(part => part.replace(/\D+/g, ''))
-            .filter(part => part.length > 0)
-            .map(id => parseInt(id, 10))
-            .filter(id => !isNaN(id) && id >= 0 && id < links.length);
-    
-          console.log(`[LLMManager] Cleaned ranked IDs for #${requestId}:`, rankedIds);
-          return rankedIds;
+            return Array.from(rankings.entries())
+                .sort((a, b) => b[1] - a[1])
+                .map(([id]) => id);
         } catch (error) {
-          console.warn(`[LLMManager] LLM ranking failed for #${requestId}:`, error);
-          return [];
+            console.warn(`[LLMManager] LLM ranking failed for #${requestId}:`, error);
+            return this.getFallbackRanking(links);
         } finally {
-          this.currentInference = null;
+            this.currentInference = null;
         }
-      }
+    }
+    
+    private updateLinkRanking(links: Link[], id: number, rank: number, requestId: number): void {
+        const link = links.find(l => l.id === id);
+        if (link) {
+            link.score = rank / 10;
+            this.onStatusUpdate(`Ranked link: ${link.text.slice(0, 30)}...`, true);
+            this.sendPartialUpdate(links, requestId);
+        }
+    }
+    
+    private async sendPartialUpdate(links: Link[], requestId: number): Promise<void> {
+        const sortedLinks = [...links].sort((a, b) => b.score - a.score);
+        chrome.runtime.sendMessage({
+            type: 'PARTIAL_LINKS_UPDATE',
+            links: sortedLinks,
+            requestId
+        });
+    }
+    private getFallbackRanking(links: Link[]): number[] {
+        // Score links based on multiple factors
+        const scoredLinks = links.map((link, id) => ({
+            id,
+            score: this.calculateLinkScore(link)
+        }));
+    
+        // Sort by score and return IDs
+        return scoredLinks
+            .sort((a, b) => b.score - a.score)
+            .map(link => link.id);
+    }
+    
+    private calculateLinkScore(link: Link): number {
+        let score = 0;
+        
+        // Position weight
+        if (link.context?.position?.isVisible) score += 0.3;
+        if ((link.context?.position?.top ?? Infinity) < 500) score += 0.2;
+        
+        // Context weight
+        if (link.context?.isInHeading) score += 0.25;
+        if (link.context?.isInMain) score += 0.15;
+        if (!link.context?.isInNav) score += 0.1; // Navigation links often less important
+        
+        // Content weight
+        if (link.text.length > 10) score += 0.1;
+        if (link.context?.surrounding && link.context.surrounding.length > 50) score += 0.1;
+        
+        return score;
+    }
     
       private async streamResponse(prompt: string, updateCallback: (text: string) => void): Promise<void> {
         let fullResponse = '';
@@ -316,7 +401,7 @@ export class LLMManager {
                     textBuffer = '';
                     console.log(`[LLMManager] Streaming response: ${fullResponse.length} chars`);
                     console.log(`[LLMManager] Streaming response: ${fullResponse}`);
-                    
+
                 }
             }
             
