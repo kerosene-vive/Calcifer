@@ -16,22 +16,73 @@ interface ModelMessage {
 class BackgroundService {
     private modelLoader: IModelLoader;
     private serviceWorkerRegistration: ServiceWorkerRegistration | null = null;
-
+    private activeContentScripts = new Map<number, boolean>();
+    private readonly INFERENCE_TIMEOUT = 50000;
     constructor() {
         this.modelLoader = new ModelLoader() as IModelLoader;
         this.initialize();
     }
 
-    private async initialize(): Promise<void> {
-        try {
-            await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
-            await this.setupServiceWorker();
-            this.setupEventListeners();
-        } catch (error) {
-            console.error("Error initializing background service:", error);
+    private async initialize() {
+        await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+        this.setupListeners();
+        await this.injectExistingTabScripts();
+    }
+
+    private setupListeners() {
+        chrome.runtime.onMessage.addListener(this.handleMessage.bind(this));
+        chrome.tabs.onCreated.addListener(tab => tab.id && this.injectContentScript(tab.id));
+        chrome.tabs.onUpdated.addListener((tabId, info) => info.status === 'loading' && this.injectContentScript(tabId));
+    }
+
+    private handleMessage(message: any, sender: chrome.runtime.MessageSender, sendResponse: Function) {
+        const tabId = sender.tab?.id;
+
+        if (message.type === 'CONTENT_SCRIPT_LOADED' && tabId) {
+            this.activeContentScripts.set(tabId, true);
+            sendResponse({ status: 'acknowledged' });
+            return;
+        }
+
+        if (message.type === 'START_INFERENCE' && tabId) {
+            this.handleInference(tabId, message, sendResponse);
+            return true;
         }
     }
 
+    private async handleInference(tabId: number, message: any, sendResponse: Function) {
+        try {
+            const response = await Promise.race([
+                chrome.tabs.sendMessage(tabId, {
+                    type: 'PROCESS_INFERENCE',
+                    prompt: message.prompt,
+                    requestId: message.requestId
+                }),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('Inference timeout')), this.INFERENCE_TIMEOUT))
+            ]);
+            sendResponse(response);
+        } catch (error) {
+            sendResponse({ type: 'INFERENCE_ERROR', error: String(error) });
+        }
+    }
+
+    private async injectContentScript(tabId: number) {
+        if (this.activeContentScripts.get(tabId)) return;
+        try {
+            await chrome.scripting.executeScript({
+                target: { tabId },
+                files: ['content.js']
+            });
+        } catch (error) {
+            console.error('[Background] Injection failed:', error);
+        }
+    }
+
+    private async injectExistingTabScripts() {
+        const tabs = await chrome.tabs.query({});
+        await Promise.all(tabs.map(tab => tab.id && this.injectContentScript(tab.id)));
+    }
+    
     private async setupServiceWorker(): Promise<void> {
         if ('serviceWorker' in navigator) {
             try {

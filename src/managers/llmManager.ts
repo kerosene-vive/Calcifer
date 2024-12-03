@@ -306,21 +306,24 @@ export class LLMManager {
         let fullResponse = '';
         let textBuffer = '';
         try {
-          await this.llmInference.generateResponse(
+        await this.llmInference.generateResponse(
             prompt,
-            this.loraModel,
             (partialResult: string, done: boolean) => {
-              textBuffer += partialResult;
-              if (done || textBuffer.length > 1024) {
-                fullResponse += textBuffer;
-                updateCallback(fullResponse);
-                textBuffer = '';
-              }
+                textBuffer += partialResult;
+                if (done || textBuffer.length > 1024) {
+                    fullResponse += textBuffer;
+                    updateCallback(fullResponse);
+                    textBuffer = '';
+                    console.log(`[LLMManager] Streaming response: ${fullResponse.length} chars`);
+                    console.log(`[LLMManager] Streaming response: ${fullResponse}`);
+                    
+                }
             }
-          );
+            
+        );
         } catch (error) {
           console.error('[LLMManager] Error during streaming response:', error);
           throw error;
         }
-      }
+}
 }
