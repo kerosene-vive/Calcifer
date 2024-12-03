@@ -23,6 +23,7 @@ interface Performance {
 interface Link {
     id: number;
     text: string;
+    href?: string;
     context?: {
         surrounding?: string;
         isInHeading?: boolean;
@@ -266,16 +267,21 @@ export class LLMManager {
             await this.currentInference;
         }
     
-        const prompt = `Rank these webpage links by importance (1-10), returning IDs as you analyze each one.
+        // First, filter out unwanted links
+        const filteredLinks = links.filter(link => !this.isUnwantedLink(link));
+        
+        const prompt = `Rank only the most relevant, content-rich links by importance (1-10).
+    Skip any promotional, sponsored, or duplicate content.
+    
     Links to rank:
-    ${links.slice(0, 10).map(link => {
+    ${filteredLinks.slice(0, 10).map(link => {
         const context = link.context?.surrounding?.slice(0, 100) || '';
         const location = link.context?.isInHeading ? '[heading]' : 
                         link.context?.isInMain ? '[main]' : '';
-        return `${link.id}: ${link.text} ${location}\nContext: ${context}\n`;
+        return `${link.id}: ${this.sanitizeTitle(link.text)} ${location}\nContext: ${context}\n`;
     }).join('\n')}
     
-    Return rankings immediately as: ID:RANK (e.g. "5:9")`;
+    Return each ranking immediately as: ID:RANK (e.g. "5:9")`;
     
         const rankings = new Map<number, number>();
         let currentPartialResponse = '';
@@ -284,47 +290,53 @@ export class LLMManager {
         try {
             this.currentRequestId = requestId;
             
-            // Start fallback timer
             const fallbackTimeout = setTimeout(() => {
                 if (rankings.size === 0) {
                     fallbackUsed = true;
-                    const fallbackRanks = this.getFallbackRanking(links);
+                    const fallbackRanks = this.getFallbackRanking(filteredLinks);
                     fallbackRanks.forEach((id, index) => {
                         const rank = Math.max(1, Math.floor((1 - index / fallbackRanks.length) * 10));
-                        this.updateLinkRanking(links, id, rank, requestId);
+                        this.updateLinkRanking(filteredLinks, id, rank, requestId);
                     });
                 }
-            }, 5000);
+            }, 3000); // Reduced timeout
     
             this.currentInference = this.streamResponse(prompt, (partial) => {
                 if (requestId !== this.currentRequestId || fallbackUsed) return;
                 
                 currentPartialResponse += partial;
-                const matches = currentPartialResponse.matchAll(/(\d+):(\d+)/g);
                 
-                for (const match of matches) {
-                    const id = parseInt(match[1]);
-                    const rank = parseInt(match[2]);
-                    if (!isNaN(id) && !isNaN(rank) && id < links.length && rank >= 1 && rank <= 10) {
-                        rankings.set(id, rank);
-                        this.updateLinkRanking(links, id, rank, requestId);
+                // Strict number pattern matching
+                const numberPatterns = [
+                    /(\d+):(\d+)/g,           // Basic ID:RANK format
+                    /ID[:\s]+(\d+)[:\s]+(\d+)/g, // Expanded format
+                    /^(\d+)[\s,]+(\d+)$/gm    // Simple number pairs
+                ];
+    
+                for (const pattern of numberPatterns) {
+                    const matches = currentPartialResponse.matchAll(pattern);
+                    for (const match of matches) {
+                        const id = parseInt(match[1]);
+                        const rank = parseInt(match[2]);
+                        if (!isNaN(id) && !isNaN(rank) && 
+                            id < filteredLinks.length && 
+                            rank >= 1 && rank <= 10 && 
+                            !rankings.has(id)) {
+                            rankings.set(id, rank);
+                            this.updateLinkRanking(filteredLinks, id, rank, requestId);
+                        }
                     }
                 }
                 
-                // Keep only last incomplete line
+                // Keep only the last incomplete line
                 currentPartialResponse = currentPartialResponse.split('\n').pop() || '';
             });
+            
             await this.currentInference;
             clearTimeout(fallbackTimeout);
     
-            // Fill missing ranks with fallback if needed
-            if (rankings.size < links.length && !fallbackUsed) {
-                const remainingLinks = links.filter(link => !rankings.has(link.id));
-                const fallbackRanks = this.getFallbackRanking(remainingLinks);
-                fallbackRanks.forEach((id, index) => {
-                    const rank = Math.max(1, Math.floor((1 - index / fallbackRanks.length) * 10));
-                    this.updateLinkRanking(links, id, rank, requestId);
-                });
+            if (rankings.size === 0) {
+                return this.getFallbackRanking(filteredLinks);
             }
     
             return Array.from(rankings.entries())
@@ -332,10 +344,71 @@ export class LLMManager {
                 .map(([id]) => id);
         } catch (error) {
             console.warn(`[LLMManager] LLM ranking failed for #${requestId}:`, error);
-            return this.getFallbackRanking(links);
+            return this.getFallbackRanking(filteredLinks);
         } finally {
             this.currentInference = null;
         }
+    }
+    
+    private isUnwantedLink(link: Link): boolean {
+        const text = (link.text || '').toLowerCase();
+        const href = (link.href || '').toLowerCase();
+        
+        // Detect promotional/ad content
+        if (text.match(/\b(ad|ads|advert|sponsor|promotion|banner)\b/i)) return true;
+        if (text.match(/\b(€|£|\$)\s*\d+/)) return true;
+        
+        // Filter tracking/analytics URLs
+        if (href.includes('googleadservices') || 
+            href.includes('doubleclick') ||
+            href.includes('analytics') ||
+            href.includes('tracking') ||
+            href.includes('utm_') ||
+            href.includes('/ads/')) return true;
+        
+        // Filter common UI elements
+        if (text.match(/^(menu|nav|skip|home|back|next|previous)$/i)) return true;
+        
+        // Filter social media buttons
+        if (text.match(/(share|tweet|pin it|follow)/i)) return true;
+        
+        // Filter metadata links
+        if (text.match(/\b(privacy|terms|cookie|copyright)\b/i)) return true;
+        
+        // Filter timestamps and metadata
+        if (text.match(/^\d+:\d+$/) || text.match(/^\d+ (minutes|hours|days) ago$/)) return true;
+        
+        // Filter long titles (likely garbage)
+        if (text.length > 150) return true;
+        
+        // Filter empty or very short text
+        if (text.length < 3) return true;
+    
+        // Filter duplicate content indicators
+        if (text.match(/\b(copy|duplicate|mirror)\b/i)) return true;
+    
+        return false;
+    }
+    
+    private sanitizeTitle(text: string): string {
+        // Remove unwanted characters
+        text = text.replace(/[»►▶→·|]/g, '')
+                   .replace(/\[\d+\]/g, '')
+                   .replace(/\s+/g, ' ')
+                   .trim();
+        
+        // Remove view counts and metadata
+        text = text.replace(/\b\d+[KkMm]?\s*(views?|subscribers?|followers?)\b/gi, '')
+                   .replace(/\b(verified|sponsorizzato|•+)\b/gi, '')
+                   .replace(/\b\d+:\d+\b/g, '')
+                   .replace(/\b\d+ (minutes?|hours?|days?) ago\b/gi, '');
+                   
+        // Truncate if still too long
+        if (text.length > 100) {
+            text = text.slice(0, 97) + '...';
+        }
+        
+        return text.trim();
     }
     
     private updateLinkRanking(links: Link[], id: number, rank: number, requestId: number): void {

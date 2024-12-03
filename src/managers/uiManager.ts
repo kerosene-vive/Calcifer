@@ -41,11 +41,23 @@ export class UIManager {
         });
     }
 
+    
+    public clearLinks(): void {
+        if (this.elements.linkContainer) {
+            this.elements.linkContainer.innerHTML = '';
+            // Add a loading placeholder
+            const loadingElement = document.createElement('div');
+            loadingElement.className = 'loading-placeholder';
+            loadingElement.textContent = 'Analyzing links...';
+            this.elements.linkContainer.appendChild(loadingElement);
+        }
+    }
+
     public displayLinks(links: Array<{ text: string; href: string; score: number }>): void {
         console.log("[UIManager] Displaying links:", links.length);
 
         const container = this.elements.linkContainer;
-        container.innerHTML = '';
+        container.innerHTML = ''; // Clear existing content
 
         if (!links?.length) {
             this.displayNoLinksMessage();
@@ -55,16 +67,17 @@ export class UIManager {
         const linksWrapper = document.createElement('div');
         linksWrapper.className = 'links-wrapper';
 
-        const sortedLinks = [...links].sort((a, b) => b.score - a.score);
+        // Only show links with scores
+        const validLinks = links.filter(link => link.score > 0)
+                              .sort((a, b) => b.score - a.score);
 
-        sortedLinks.forEach(link => {
+        validLinks.forEach(link => {
             const linkElement = this.createLinkElement(link);
             linksWrapper.appendChild(linkElement);
         });
 
         container.appendChild(linksWrapper);
         container.style.display = 'block';
-        container.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
 
     private createLinkElement(link: { text: string; href: string; score: number }): HTMLElement {

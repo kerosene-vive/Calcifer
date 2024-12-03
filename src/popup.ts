@@ -48,35 +48,28 @@ export class PopupManager {
         });
     }
 
-    private handlePartialUpdate(links: Link[], requestId: number): void {
-        if (requestId !== this.currentRequestId) return;
-        
-        const sortedLinks = [...links].filter(link => link.score > 0)
-            .sort((a, b) => b.score - a.score);
-            
-        if (sortedLinks.length > 0) {
-            this.uiManager.displayLinks(sortedLinks);
-            this.handleStatusUpdate("Analyzing links...", true);
+
+    private async updateUIForTab(tab: chrome.tabs.Tab): Promise<void> {
+        if (!tab.url) return;
+
+        // Clear UI immediately
+        this.uiManager.clearLinks();
+        this.handleStatusUpdate("Analyzing page...", true);
+
+        try {
+            await this.tabManager.analyzeCurrentPage(tab.url);
+        } catch (error) {
+            console.error("[PopupManager] Error analyzing page:", error);
+            this.handleStatusUpdate("Error analyzing page", false);
         }
     }
-    
-    public async handleNewLinks(
-        links: Array<{ text: string; href: string; score: number }>, 
-        url: string, 
-        requestId: number, 
-        error?: string
-    ): Promise<void> {
-        console.log("[PopupManager] Handling links:", {
-            count: links?.length,
-            requestId,
-            error
-        });
 
+    public async handleNewLinks(links: Link[], url: string, requestId: number, error?: string): Promise<void> {
         this.currentRequestId = requestId;
 
         if (error) {
-            this.uiManager.handleLoadingError(error);
-            this.handleStatusUpdate(error, false);
+            this.uiManager.displayLinks([]); // Clear any existing links
+            this.handleStatusUpdate(`Error: ${error}`, false);
             return;
         }
 
@@ -87,30 +80,26 @@ export class PopupManager {
         }
 
         const sortedLinks = [...links]
-            .sort((a, b) => b.score - a.score)
-            .filter(link => link.score > 0);
+            .filter(link => link.score > 0)
+            .sort((a, b) => b.score - a.score);
 
-        if (sortedLinks.length > 0) {
-            this.uiManager.displayLinks(sortedLinks);
-            this.handleStatusUpdate("Analysis complete", false);
-        } else {
-            this.uiManager.displayLinks([]);
-            this.handleStatusUpdate("No relevant links found", false);
-        }
+        this.uiManager.displayLinks(sortedLinks);
+        this.handleStatusUpdate(
+            sortedLinks.length > 0 ? "Analysis complete" : "No relevant links found", 
+            false
+        );
     }
 
-    private async updateUIForTab(tab: chrome.tabs.Tab): Promise<void> {
-        if (!tab.url) return;
+    private handlePartialUpdate(links: Link[], requestId: number): void {
+        if (requestId !== this.currentRequestId) return;
         
-        this.uiManager.getElements().linkContainer.innerHTML = '';
-        this.handleStatusUpdate("Analyzing page...", true);
-
-        try {
-            await this.tabManager.analyzeCurrentPage(tab.url);
-        } catch (error) {
-            const message = error instanceof Error ? error.message : 'Unknown error';
-            this.uiManager.handleLoadingError(message);
-            this.handleStatusUpdate(message, false);
+        const sortedLinks = [...links]
+            .filter(link => link.score > 0)
+            .sort((a, b) => b.score - a.score);
+            
+        if (sortedLinks.length > 0) {
+            this.uiManager.displayLinks(sortedLinks);
+            this.handleStatusUpdate("Analyzing links...", true);
         }
     }
 
