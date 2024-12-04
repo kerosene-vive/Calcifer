@@ -1,7 +1,8 @@
+// popup.ts
 import "./popup.css";
-import { UIManager } from './managers/uiManager.js';
-import { LLMManager } from './managers/llmManager.js';
-import { TabManager } from './managers/tabManager.js';
+import { UIManager } from './managers/uiManager';
+import { LLMManager } from './managers/llmManager';
+import { TabManager } from './managers/tabManager';
 
 interface Link {
     text: string;
@@ -14,116 +15,109 @@ export class PopupManager {
     private llmManager: LLMManager;
     private tabManager: TabManager;
     private debug: HTMLElement;
-    private port: chrome.runtime.Port;
     private initialized: boolean = false;
+    private activeTab: chrome.tabs.Tab | null = null;
+    private currentRequestId: number | null = null;
 
     constructor() {
         this.debug = document.getElementById('debug') || document.createElement('div');
         this.uiManager = new UIManager();
         this.llmManager = new LLMManager(this.debug, this.handleStatusUpdate.bind(this));
-        this.tabManager = TabManager.getInstance();
-        this.port = chrome.runtime.connect({ name: 'popup' });
+        this.tabManager = TabManager.getInstance(this.llmManager, this);
         this.setupListeners();
     }
 
     private setupListeners(): void {
-        // Global message listener
         chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-            if (!this.initialized) {
-                console.log("[PopupManager] Waiting for initialization...");
-                return;
-            }
+            if (!this.initialized) return false;
 
-            console.log("[PopupManager] Received message:", message);
-            
-            if (message.type === 'NEW_LINKS' && message.data) {
-                console.log("[PopupManager] Processing new links for:", message.data.url);
-                this.handleNewLinks(message.data.links, message.data.url);
-                return true;
+            switch (message.type) {
+                case 'NEW_LINKS':
+                    this.handleNewLinks(
+                        message.data?.links, 
+                        message.data?.url, 
+                        message.data?.requestId, 
+                        message.data?.error
+                    );
+                    break;
+                case 'PARTIAL_LINKS_UPDATE':
+                    this.handlePartialUpdate(message.links, message.requestId);
+                    break;
             }
-        });
-
-        // Tab change listener
-        chrome.tabs.onActivated.addListener(async (activeInfo) => {
-            if (!this.initialized) return;
-            
-            const tab = await chrome.tabs.get(activeInfo.tabId);
-            console.log("[PopupManager] Tab changed:", tab.url);
-            this.refreshLinks();
-        });
-
-        // Tab update listener
-        chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-            if (!this.initialized) return;
-            
-            if (changeInfo.status === 'complete') {
-                console.log("[PopupManager] Tab updated:", tab.url);
-                this.refreshLinks();
-            }
+            return false;
         });
     }
 
-    private async refreshLinks(): Promise<void> {
+
+    private async updateUIForTab(tab: chrome.tabs.Tab): Promise<void> {
+        if (!tab.url) return;
+
+        // Clear UI immediately
+        this.uiManager.clearLinks();
+        this.handleStatusUpdate("Analyzing page...", true);
+
         try {
-            const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-            if (tabs[0]?.url) {
-                console.log("[PopupManager] Refreshing links for:", tabs[0].url);
-                const links = await this.tabManager.getCurrentPageLinks();
-                this.handleNewLinks(links, tabs[0].url);
-            }
+            await this.tabManager.analyzeCurrentPage(tab.url);
         } catch (error) {
-            console.error("[PopupManager] Error refreshing links:", error);
+            console.error("[PopupManager] Error analyzing page:", error);
+            this.handleStatusUpdate("Error analyzing page", false);
         }
     }
 
-    private handleNewLinks(links: Link[], url: string): void {
-        console.log("[PopupManager] Handling new links for:", url, links);
-        
-        // Clear previous content
-        const elements = this.uiManager.getElements();
-        if (elements.linkContainer) {
-            elements.linkContainer.innerHTML = '';
+    public async handleNewLinks(links: Link[], url: string, requestId: number, error?: string): Promise<void> {
+        this.currentRequestId = requestId;
+
+        if (error) {
+            this.uiManager.displayLinks([]); // Clear any existing links
+            this.handleStatusUpdate(`Error: ${error}`, false);
+            return;
         }
 
-        // Add URL message
-        UIManager.addMessageToUI(
-            `Analyzing links from: ${url}`,
-            'assistant',
-            elements,
-            true
-        );
+        if (!links?.length) {
+            this.uiManager.displayLinks([]);
+            this.handleStatusUpdate("No links found", false);
+            return;
+        }
 
-        // Display links
-        if (links && links.length > 0) {
-            console.log("[PopupManager] Displaying links:", links);
-            this.uiManager.displayLinks(links);
-        } else {
-            UIManager.addMessageToUI(
-                "No relevant links found on this page.",
-                'assistant',
-                elements,
-                true
-            );
+        const sortedLinks = [...links]
+            .filter(link => link.score > 0)
+            .sort((a, b) => b.score - a.score);
+
+        this.uiManager.displayLinks(sortedLinks);
+        this.handleStatusUpdate(
+            sortedLinks.length > 0 ? "Analysis complete" : "No relevant links found", 
+            false
+        );
+    }
+
+    private handlePartialUpdate(links: Link[], requestId: number): void {
+        if (requestId !== this.currentRequestId) return;
+        
+        const sortedLinks = [...links]
+            .filter(link => link.score > 0)
+            .sort((a, b) => b.score - a.score);
+            
+        if (sortedLinks.length > 0) {
+            this.uiManager.displayLinks(sortedLinks);
+            this.handleStatusUpdate("Analyzing links...", true);
         }
     }
 
     public async initialize(): Promise<void> {
         try {
-            this.handleStatusUpdate("Starting initialization");
-            
-            // Initialize LLM
+            this.handleStatusUpdate("Initializing...", true);
             await this.llmManager.initialize();
             
-            // Mark as initialized
+            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            if (!tab?.url) throw new Error("No active tab found");
+
+            this.activeTab = tab;
             this.initialized = true;
-            
-            // Get initial links
-            await this.refreshLinks();
-            
-            this.handleStatusUpdate("Ready", false);
+            await this.updateUIForTab(tab);
+
         } catch (error) {
-            console.error("[PopupManager] Error initializing:", error);
-            this.handleStatusUpdate("Initialization failed", false);
+            const message = error instanceof Error ? error.message : String(error);
+            this.uiManager.handleLoadingError(message);
             throw error;
         }
     }
@@ -133,18 +127,15 @@ export class PopupManager {
     }
 }
 
-const initPopup = async () => {
-    let manager: PopupManager | null = null;
+document.addEventListener('DOMContentLoaded', async () => {
     try {
-        manager = new PopupManager();
+        const manager = new PopupManager();
         await manager.initialize();
     } catch (error) {
         console.error('[PopupManager] Failed to initialize:', error);
+        const debug = document.getElementById('debug');
+        if (debug) {
+            debug.textContent = `Error: ${error instanceof Error ? error.message : String(error)}`;
+        }
     }
-};
-
-// Initialize only after DOM is ready
-document.addEventListener('DOMContentLoaded', () => {
-    console.log("[PopupManager] DOM loaded, initializing...");
-    initPopup().catch(console.error);
 });

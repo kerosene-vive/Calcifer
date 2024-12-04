@@ -1,54 +1,41 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="stylesheet" href="popup.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="popup.css">
 </head>
 <body>
-    <div class="chat-container">
-        <div class="chat-header">
-            <div class="header-left">
-                <span class="bot-name"></span>
-            </div>
-            <div class="header-right">
-                <div id="status" class="status"></div>
-            </div>
-        </div>
-
-        <div id="debug" class="debug" style="display: none;"></div>
-        
-        <!-- Single loading container -->
-        <div id="loadingContainer" class="loading-container"></div>
-        
-        <div class="chat-history">
-            <div id="answerWrapper" class="message-wrapper" style="display: none;">
-                <div class="message assistant-message">
-                    <div class="message-header">
-                        <img src="icons/icon-128.png" alt="Bot Icon" class="message-icon">
-                    </div>
-                    <div id="answer" class="message-content"></div>
-                </div>
-            </div>
-        </div>
-
-        <div id="loading-indicator" style="display: none;">Loading...</div>
-
-        <!-- Link Analysis Section -->
-        <div id="link-container"></div>
-
-        <div class="input-area">
-            <div class="input-container">
-                <textarea
-                    id="query-input"
-                    class="query-input"
-                    placeholder="Message Calcifer..."
-                    rows="1"
-                ></textarea>
-            </div>
-        </div>
+  <div class="chat-container">
+    <div class="chat-header">
+      <div class="header-left">
+        <span class="bot-name"></span>
+      </div>
+      <div class="header-right">
+        <div id="status" class="status"></div>
+      </div>
     </div>
-
-    <script type="module" src="./popup.ts"></script>
+    <div id="debug" class="debug" style="display: none;"></div>
+    <div id="loadingContainer" class="loading-container"></div>
+    <div class="chat-history">
+      <div id="answerWrapper" class="message-wrapper" style="display: none;">
+        <div class="message assistant-message">
+          <div class="message-header">
+            <img src="icons/icon-128.png" alt="Bot Icon" class="message-icon">
+          </div>
+          <div id="answer" class="message-content"></div>
+        </div>
+      </div>
+    </div>
+    <!-- Link Analysis Section -->
+    <div id="link-container"></div>
+    <div class="input-area">
+      <div class="input-container">
+        <textarea id="query-input" class="query-input" placeholder="Message Calcifer..." rows="1"></textarea>
+      </div>
+    </div>
+    <div id="loading-indicator" style="display: none;">Loading...</div>
+  </div>
+  <script type="module" src="./popup.ts"></script>
 </body>
 </html>
