@@ -17,6 +17,7 @@ export class TabManager {
         this.setupListeners();
     }
 
+
     private handleStatusUpdate(status: string): void {
         console.log(`[TabManager] Status update: ${status}`);
     }

@@ -76,8 +76,8 @@ export class LLMManager {
         navigator.gpu.requestAdapter = async function (...args): Promise<any | null> {
             const adapter = await originalRequestAdapter.apply(this, args);
             if (!adapter) return null;
-            adapter.requestAdapterInfo = function (): Promise<{ vendor: string; architecture: string }> {
-                return Promise.resolve(this.info || { vendor: "unknown", architecture: "unknown" });
+            adapter.requestAdapterInfo = function (): Promise<GPUAdapterInfo> {
+                return Promise.resolve(this.info || { vendor: "unknown", architecture: "unknown", __brand: "", device: "", description: "" });
             };
             const originalRequestDevice = adapter.requestDevice;
             adapter.requestDevice = async function (...deviceArgs): Promise<any | null> {
@@ -127,7 +127,11 @@ export class LLMManager {
                         throw new Error('Module loaded but contents are missing');
                     }
                 } catch (importError) {
-                    throw new Error(`Failed to import main module: ${importError.message}`);
+                    if (importError instanceof Error) {
+                        throw new Error(`Failed to import main module: ${importError.message}`);
+                    } else {
+                        throw new Error('Failed to import main module: Unknown error');
+                    }
                 }
             } catch (error) {
                 const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -214,7 +218,11 @@ export class LLMManager {
             if (window.gc) window.gc();
             
         } catch (error) {
-            console.error(`Initialization error: ${error.message}`, error);
+            if (error instanceof Error) {
+                console.error(`Initialization error: ${error.message}`, error);
+            } else {
+                console.error('Initialization error:', error);
+            }
             throw error;
         }
     }
@@ -242,7 +250,7 @@ export class LLMManager {
         }
     }
     
-    private async streamResponse(prompt: string, updateCallback: (text: string) => void): Promise<void> {
+    public async streamResponse(prompt: string, updateCallback: (text: string) => void): Promise<void> {
         let fullResponse = '';
         let textBuffer = '';
         let isCancelled = false;
