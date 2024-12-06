@@ -11,7 +11,8 @@ interface IModelLoader {
 class BackgroundService {
     private modelLoader: IModelLoader;
     constructor() {
-        this.modelLoader = new ModelLoader() as IModelLoader;
+        const element = document.createElement('div'); // create an HTMLElement
+        this.modelLoader = new ModelLoader(element) as IModelLoader;
         this.initialize();
     }
 
