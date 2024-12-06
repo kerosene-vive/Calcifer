@@ -46,12 +46,15 @@ export class UIManager {
             loadingElement.className = 'loading-placeholder';
             loadingElement.textContent = 'Analyzing links...';
             this.elements.linkContainer.appendChild(loadingElement);
+            this.handleLoadingStatus('Analyzing links...', true);
         }
     }
 
 
     public displayLinks(links: Array<{ text: string; href: string; score: number }>): void {
         console.log("[UIManager] Displaying links:", links.length);
+        this.handleLoadingStatus('Analysis complete', false);
+
         const container = this.elements.linkContainer;
         container.innerHTML = '';
         if (!links?.length) {
@@ -76,6 +79,7 @@ export class UIManager {
 
         container.appendChild(linksWrapper);
         container.style.display = 'block';
+
     }
 
 
@@ -128,11 +132,20 @@ export class UIManager {
         if (statusElement) {
             statusElement.textContent = `Status: ${message}`;
             statusElement.classList.toggle('loading', isLoading);
+            // Add or remove complete class based on loading state
+            statusElement.classList.toggle('complete', !isLoading);
+            
+            // Show/hide loading container
+            if (this.elements.loadingContainer) {
+                this.elements.loadingContainer.style.display = isLoading ? 'flex' : 'none';
+            }
         }
     }
 
 
     public handleLoadingError(message: string): void {
+        this.handleLoadingStatus('Error occurred', false);
+
         const errorDiv = document.createElement('div');
         errorDiv.className = 'error-message';
         const alert = document.createElement('div');

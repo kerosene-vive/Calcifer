@@ -158,12 +158,33 @@ body {
 
 /* Loading container */
 .loading-container {
+  background: url('./icons/ramen.gif') center/contain no-repeat;
+  width: 100px;
+  height: 100px;
+  margin-top: 20px;
+
   padding: 16px;
   display: flex;
   flex-direction: column;
   align-items: center;
 }
 
+/* Show loading container only when status indicates loading */
+.status:not(.complete) ~ .loading-container {
+  visibility: visible;
+}
+
+
+/* Optional loading animation */
+@keyframes loadingPulse {
+  0% { opacity: 0.6; }
+  50% { opacity: 1; }
+  100% { opacity: 0.6; }
+}
+
+.status:not(.complete) ~ .loading-container {
+  animation: loadingPulse 1.5s ease-in-out infinite;
+}
 /* Scrollbar styles */
 ::-webkit-scrollbar {
   width: 8px;
