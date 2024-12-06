@@ -9,6 +9,7 @@ export interface UIElements {
 
 export class UIManager {
     private elements: UIElements;
+    private readonly ANIMATION_DELAY = 150; // Delay between each link animation
 
     constructor() {
         this.elements = this.initializeElements();
@@ -52,19 +53,27 @@ export class UIManager {
     public displayLinks(links: Array<{ text: string; href: string; score: number }>): void {
         console.log("[UIManager] Displaying links:", links.length);
         const container = this.elements.linkContainer;
-        container.innerHTML = ''; // Clear existing content
+        container.innerHTML = '';
         if (!links?.length) {
             this.displayNoLinksMessage();
             return;
         }
+        const logoContainer = document.createElement('div');
+        logoContainer.className = 'logo-container';
+        const logo = document.createElement('div');
+        logo.className = 'logo';
+        logoContainer.appendChild(logo);
+        container.appendChild(logoContainer);
         const linksWrapper = document.createElement('div');
         linksWrapper.className = 'links-wrapper';
         const validLinks = links.filter(link => link.score > 0)
                               .sort((a, b) => b.score - a.score);
-        validLinks.forEach(link => {
+        validLinks.forEach((link, index) => {
             const linkElement = this.createLinkElement(link);
+            linkElement.style.animationDelay = `${(index + 1) * this.ANIMATION_DELAY}ms`;
             linksWrapper.appendChild(linkElement);
         });
+
         container.appendChild(linksWrapper);
         container.style.display = 'block';
     }
