@@ -260,8 +260,6 @@ export class LLMManager {
         }
     }
 
-
-    
     public async getLLMRanking(links: Link[], requestId: number): Promise<number[]> {
         if (this.currentInference) {
             await this.currentInference;
@@ -269,6 +267,7 @@ export class LLMManager {
     
         // First, filter out unwanted links
         const filteredLinks = links.filter(link => !this.isUnwantedLink(link));
+        console.log(`[LLMManager] Filtered Links:`, filteredLinks);
         
         const prompt = `Rank only the most relevant, content-rich links by importance (1-10).
     Skip any promotional, sponsored, or duplicate content.
@@ -339,9 +338,13 @@ export class LLMManager {
                 return this.getFallbackRanking(filteredLinks);
             }
     
-            return Array.from(rankings.entries())
+            const rankedIds = Array.from(rankings.entries())
                 .sort((a, b) => b[1] - a[1])
                 .map(([id]) => id);
+    
+            console.log(`[LLMManager] Ranked IDs:`, rankedIds); // Add logging
+    
+            return rankedIds;
         } catch (error) {
             console.warn(`[LLMManager] LLM ranking failed for #${requestId}:`, error);
             return this.getFallbackRanking(filteredLinks);

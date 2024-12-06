@@ -123,59 +123,6 @@ export class UIManager {
     }
 
 
-    public static addMessageToUI(content: string, role: 'user' | 'assistant', elements: UIElements, isUpdating = false): void {
-        const chatHistoryContainer = document.querySelector('.chat-history');
-        if (!chatHistoryContainer) throw new Error("Chat history container not found");
-        let messageElement: HTMLElement;
-        if (isUpdating) {
-            messageElement = chatHistoryContainer.querySelector('.message-wrapper:last-child') as HTMLElement;
-            if (!messageElement) {
-                messageElement = this.createMessageElement(content, role);
-                chatHistoryContainer.appendChild(messageElement);
-            } else {
-                const messageContent = messageElement.querySelector('.message-content');
-                if (messageContent) {
-                    messageContent.innerHTML = this.sanitizeHTML(content);
-                }
-            }
-        } else {
-            messageElement = this.createMessageElement(content, role);
-            chatHistoryContainer.appendChild(messageElement);
-        }
-        elements.answerWrapper.style.display = 'block';
-        messageElement.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    }
-
-
-    private static createMessageElement(content: string, role: 'user' | 'assistant'): HTMLElement {
-        const wrapper = document.createElement('div');
-        wrapper.className = 'message-wrapper';
-        const messageContainer = document.createElement('div');
-        messageContainer.className = `message ${role}-message`;
-        const header = document.createElement('div');
-        header.className = 'message-header';
-        if (role === 'assistant') {
-            const icon = document.createElement('img');
-            icon.src = '/icons/icon-128.png';
-            icon.alt = 'Bot Icon';
-            icon.className = 'message-icon';
-            icon.onerror = () => icon.style.display = 'none';
-            header.appendChild(icon);
-        }
-        const timestamp = document.createElement('span');
-        timestamp.className = 'timestamp';
-        timestamp.textContent = new Date().toLocaleTimeString();
-        header.appendChild(timestamp);
-        const messageContent = document.createElement('div');
-        messageContent.className = 'message-content';
-        messageContent.innerHTML = this.sanitizeHTML(content);
-        messageContainer.appendChild(header);
-        messageContainer.appendChild(messageContent);
-        wrapper.appendChild(messageContainer);
-        return wrapper;
-    }
-
-
     public handleLoadingError(message: string): void {
         const errorDiv = document.createElement('div');
         errorDiv.className = 'error-message';
@@ -195,16 +142,6 @@ export class UIManager {
         errorDiv.appendChild(alert);
         this.elements.loadingContainer.innerHTML = '';
         this.elements.loadingContainer.appendChild(errorDiv);
-    }
-
-
-    private static sanitizeHTML(text: string): string {
-        return text
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#039;');
     }
 
 
