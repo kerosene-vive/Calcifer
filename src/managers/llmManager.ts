@@ -23,10 +23,11 @@ interface Performance {
 
 export class LLMManager {
     private llmInference!: LlmInference;
+    private streamController: AbortController | null = null;
+
     private loraModel: any = null;
     private debug: HTMLElement;
     private initRetryCount: number = 0;
-    private currentInference: { cancel: () => void } | null = null;
     private readonly MAX_RETRIES = 3;
     private modelLoader: ModelLoader;
     private onStatusUpdate: (message: string, isLoading?: boolean) => void;
@@ -250,40 +251,42 @@ export class LLMManager {
         }
     }
     
-    public async streamResponse(prompt: string, updateCallback: (text: string) => void): Promise<void> {
-        let fullResponse = '';
-        let textBuffer = '';
-        let isCancelled = false;
-    
-        const cancelToken = {
-            cancel: () => { isCancelled = true; }
-        };
-    
-        this.currentInference = cancelToken;
-    
+    async streamResponse(
+        prompt: string,
+        onUpdate: (text: string, isComplete: boolean) => void,
+        onError?: (error: Error) => void
+      ): Promise<void> {
+        this.streamController = new AbortController();
+        const signal = this.streamController.signal;
+        
+        let buffer = '';
+        const CHUNK_SIZE = 512; // Configurable chunk size
+        
         try {
-            await this.llmInference.generateResponse(
-                prompt,
-                (partialResult: string, done: boolean) => {
-                    if (isCancelled) return;
-                    textBuffer += partialResult;
-                    if (done || textBuffer.length > 1024) {
-                        fullResponse += textBuffer;
-                        updateCallback(fullResponse);
-                        textBuffer = '';
-                        console.log(`[LLMManager] Streaming response: ${fullResponse.length} chars`);
-                        console.log(`[LLMManager] Streaming response: ${fullResponse}`);
-                    }
-                }
-            );
-        } catch (error) {
-            if (!isCancelled) {
-                console.error('[LLMManager] Error during streaming response:', error);
-                throw error;
+          await this.llmInference.generateResponse(
+            prompt,
+            (chunk: string, isDone: boolean) => {
+              if (signal.aborted) return;
+              
+              buffer += chunk;
+              
+              // Stream chunks or when response is complete
+              if (buffer.length >= CHUNK_SIZE || isDone) {
+                onUpdate(buffer, isDone);
+                buffer = isDone ? '' : buffer;
+              }
             }
+          );
+        } catch (error) {
+          if (!signal.aborted) {
+            onError?.(error instanceof Error ? error : new Error(String(error)));
+          }
         } finally {
-            this.currentInference = null;
+          this.streamController = null;
         }
-    }
-
+      }
+    
+      cancelStream(): void {
+        this.streamController?.abort();
+      }
 }
