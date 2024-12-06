@@ -2,7 +2,7 @@
   "compilerOptions": {
     "target": "es6",
     "module": "commonjs",
-    "lib": ["dom", "es6"],
+    "lib": ["es2017", "dom"],
     "types": ["@webgpu/types"],
     "moduleResolution": "node",
     "esModuleInterop": true,
