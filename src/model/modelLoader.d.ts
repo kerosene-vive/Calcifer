@@ -1,7 +1,7 @@
 import { CacheManager } from './cacheManager';
 
 export class ModelLoader {
-    constructor();
+    constructor(debug: HTMLElement);
     private debug: HTMLElement;
     private progressBars: Record<string, { bar: HTMLElement; percentage: HTMLElement }>;
     private cacheManager: CacheManager;

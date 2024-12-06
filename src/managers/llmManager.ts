@@ -20,31 +20,13 @@ interface Performance {
     };
 }
 
-interface Link {
-    id: number;
-    text: string;
-    href?: string;
-    context?: {
-        surrounding?: string;
-        isInHeading?: boolean;
-        isInMain?: boolean;
-        isInNav?: boolean;
-        position?: {
-            isVisible?: boolean;
-            top?: number;
-        };
-        score?: number;
-    };
-}
 
 export class LLMManager {
-    private currentInference: Promise<any> | null = null;
-    private currentRequestId: number | null = null;
-
     private llmInference!: LlmInference;
     private loraModel: any = null;
     private debug: HTMLElement;
     private initRetryCount: number = 0;
+    private currentInference: { cancel: () => void } | null = null;
     private readonly MAX_RETRIES = 3;
     private modelLoader: ModelLoader;
     private onStatusUpdate: (message: string, isLoading?: boolean) => void;
@@ -94,8 +76,8 @@ export class LLMManager {
         navigator.gpu.requestAdapter = async function (...args): Promise<any | null> {
             const adapter = await originalRequestAdapter.apply(this, args);
             if (!adapter) return null;
-            adapter.requestAdapterInfo = function (): Promise<{ vendor: string; architecture: string }> {
-                return Promise.resolve(this.info || { vendor: "unknown", architecture: "unknown" });
+            adapter.requestAdapterInfo = function (): Promise<GPUAdapterInfo> {
+                return Promise.resolve(this.info || { vendor: "unknown", architecture: "unknown", __brand: "", device: "", description: "" });
             };
             const originalRequestDevice = adapter.requestDevice;
             adapter.requestDevice = async function (...deviceArgs): Promise<any | null> {
@@ -145,7 +127,11 @@ export class LLMManager {
                         throw new Error('Module loaded but contents are missing');
                     }
                 } catch (importError) {
-                    throw new Error(`Failed to import main module: ${importError.message}`);
+                    if (importError instanceof Error) {
+                        throw new Error(`Failed to import main module: ${importError.message}`);
+                    } else {
+                        throw new Error('Failed to import main module: Unknown error');
+                    }
                 }
             } catch (error) {
                 const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -232,7 +218,11 @@ export class LLMManager {
             if (window.gc) window.gc();
             
         } catch (error) {
-            console.error(`Initialization error: ${error.message}`, error);
+            if (error instanceof Error) {
+                console.error(`Initialization error: ${error.message}`, error);
+            } else {
+                console.error('Initialization error:', error);
+            }
             throw error;
         }
     }
@@ -259,229 +249,41 @@ export class LLMManager {
             clearInterval(memoryMonitor);
         }
     }
-
-
     
-    public async getLLMRanking(links: Link[], requestId: number): Promise<number[]> {
-        if (this.currentInference) {
-            await this.currentInference;
-        }
+    public async streamResponse(prompt: string, updateCallback: (text: string) => void): Promise<void> {
+        let fullResponse = '';
+        let textBuffer = '';
+        let isCancelled = false;
     
-        // First, filter out unwanted links
-        const filteredLinks = links.filter(link => !this.isUnwantedLink(link));
-        
-        const prompt = `Rank only the most relevant, content-rich links by importance (1-10).
-    Skip any promotional, sponsored, or duplicate content.
+        const cancelToken = {
+            cancel: () => { isCancelled = true; }
+        };
     
-    Links to rank:
-    ${filteredLinks.slice(0, 10).map(link => {
-        const context = link.context?.surrounding?.slice(0, 100) || '';
-        const location = link.context?.isInHeading ? '[heading]' : 
-                        link.context?.isInMain ? '[main]' : '';
-        return `${link.id}: ${this.sanitizeTitle(link.text)} ${location}\nContext: ${context}\n`;
-    }).join('\n')}
-    
-    Return each ranking immediately as: ID:RANK (e.g. "5:9")`;
-    
-        const rankings = new Map<number, number>();
-        let currentPartialResponse = '';
-        let fallbackUsed = false;
+        this.currentInference = cancelToken;
     
         try {
-            this.currentRequestId = requestId;
-            
-            const fallbackTimeout = setTimeout(() => {
-                if (rankings.size === 0) {
-                    fallbackUsed = true;
-                    const fallbackRanks = this.getFallbackRanking(filteredLinks);
-                    fallbackRanks.forEach((id, index) => {
-                        const rank = Math.max(1, Math.floor((1 - index / fallbackRanks.length) * 10));
-                        this.updateLinkRanking(filteredLinks, id, rank, requestId);
-                    });
-                }
-            }, 3000); // Reduced timeout
-    
-            this.currentInference = this.streamResponse(prompt, (partial) => {
-                if (requestId !== this.currentRequestId || fallbackUsed) return;
-                
-                currentPartialResponse += partial;
-                
-                // Strict number pattern matching
-                const numberPatterns = [
-                    /(\d+):(\d+)/g,           // Basic ID:RANK format
-                    /ID[:\s]+(\d+)[:\s]+(\d+)/g, // Expanded format
-                    /^(\d+)[\s,]+(\d+)$/gm    // Simple number pairs
-                ];
-    
-                for (const pattern of numberPatterns) {
-                    const matches = currentPartialResponse.matchAll(pattern);
-                    for (const match of matches) {
-                        const id = parseInt(match[1]);
-                        const rank = parseInt(match[2]);
-                        if (!isNaN(id) && !isNaN(rank) && 
-                            id < filteredLinks.length && 
-                            rank >= 1 && rank <= 10 && 
-                            !rankings.has(id)) {
-                            rankings.set(id, rank);
-                            this.updateLinkRanking(filteredLinks, id, rank, requestId);
-                        }
+            await this.llmInference.generateResponse(
+                prompt,
+                (partialResult: string, done: boolean) => {
+                    if (isCancelled) return;
+                    textBuffer += partialResult;
+                    if (done || textBuffer.length > 1024) {
+                        fullResponse += textBuffer;
+                        updateCallback(fullResponse);
+                        textBuffer = '';
+                        console.log(`[LLMManager] Streaming response: ${fullResponse.length} chars`);
+                        console.log(`[LLMManager] Streaming response: ${fullResponse}`);
                     }
                 }
-                
-                // Keep only the last incomplete line
-                currentPartialResponse = currentPartialResponse.split('\n').pop() || '';
-            });
-            
-            await this.currentInference;
-            clearTimeout(fallbackTimeout);
-    
-            if (rankings.size === 0) {
-                return this.getFallbackRanking(filteredLinks);
-            }
-    
-            return Array.from(rankings.entries())
-                .sort((a, b) => b[1] - a[1])
-                .map(([id]) => id);
+            );
         } catch (error) {
-            console.warn(`[LLMManager] LLM ranking failed for #${requestId}:`, error);
-            return this.getFallbackRanking(filteredLinks);
+            if (!isCancelled) {
+                console.error('[LLMManager] Error during streaming response:', error);
+                throw error;
+            }
         } finally {
             this.currentInference = null;
         }
     }
-    
-    private isUnwantedLink(link: Link): boolean {
-        const text = (link.text || '').toLowerCase();
-        const href = (link.href || '').toLowerCase();
-        
-        // Detect promotional/ad content
-        if (text.match(/\b(ad|ads|advert|sponsor|promotion|banner)\b/i)) return true;
-        if (text.match(/\b(€|£|\$)\s*\d+/)) return true;
-        
-        // Filter tracking/analytics URLs
-        if (href.includes('googleadservices') || 
-            href.includes('doubleclick') ||
-            href.includes('analytics') ||
-            href.includes('tracking') ||
-            href.includes('utm_') ||
-            href.includes('/ads/')) return true;
-        
-        // Filter common UI elements
-        if (text.match(/^(menu|nav|skip|home|back|next|previous)$/i)) return true;
-        
-        // Filter social media buttons
-        if (text.match(/(share|tweet|pin it|follow)/i)) return true;
-        
-        // Filter metadata links
-        if (text.match(/\b(privacy|terms|cookie|copyright)\b/i)) return true;
-        
-        // Filter timestamps and metadata
-        if (text.match(/^\d+:\d+$/) || text.match(/^\d+ (minutes|hours|days) ago$/)) return true;
-        
-        // Filter long titles (likely garbage)
-        if (text.length > 150) return true;
-        
-        // Filter empty or very short text
-        if (text.length < 3) return true;
-    
-        // Filter duplicate content indicators
-        if (text.match(/\b(copy|duplicate|mirror)\b/i)) return true;
-    
-        return false;
-    }
-    
-    private sanitizeTitle(text: string): string {
-        // Remove unwanted characters
-        text = text.replace(/[»►▶→·|]/g, '')
-                   .replace(/\[\d+\]/g, '')
-                   .replace(/\s+/g, ' ')
-                   .trim();
-        
-        // Remove view counts and metadata
-        text = text.replace(/\b\d+[KkMm]?\s*(views?|subscribers?|followers?)\b/gi, '')
-                   .replace(/\b(verified|sponsorizzato|•+)\b/gi, '')
-                   .replace(/\b\d+:\d+\b/g, '')
-                   .replace(/\b\d+ (minutes?|hours?|days?) ago\b/gi, '');
-                   
-        // Truncate if still too long
-        if (text.length > 100) {
-            text = text.slice(0, 97) + '...';
-        }
-        
-        return text.trim();
-    }
-    
-    private updateLinkRanking(links: Link[], id: number, rank: number, requestId: number): void {
-        const link = links.find(l => l.id === id);
-        if (link) {
-            link.score = rank / 10;
-            this.onStatusUpdate(`Ranked link: ${link.text.slice(0, 30)}...`, true);
-            this.sendPartialUpdate(links, requestId);
-        }
-    }
-    
-    private async sendPartialUpdate(links: Link[], requestId: number): Promise<void> {
-        const sortedLinks = [...links].sort((a, b) => b.score - a.score);
-        chrome.runtime.sendMessage({
-            type: 'PARTIAL_LINKS_UPDATE',
-            links: sortedLinks,
-            requestId
-        });
-    }
-    private getFallbackRanking(links: Link[]): number[] {
-        // Score links based on multiple factors
-        const scoredLinks = links.map((link, id) => ({
-            id,
-            score: this.calculateLinkScore(link)
-        }));
-    
-        // Sort by score and return IDs
-        return scoredLinks
-            .sort((a, b) => b.score - a.score)
-            .map(link => link.id);
-    }
-    
-    private calculateLinkScore(link: Link): number {
-        let score = 0;
-        
-        // Position weight
-        if (link.context?.position?.isVisible) score += 0.3;
-        if ((link.context?.position?.top ?? Infinity) < 500) score += 0.2;
-        
-        // Context weight
-        if (link.context?.isInHeading) score += 0.25;
-        if (link.context?.isInMain) score += 0.15;
-        if (!link.context?.isInNav) score += 0.1; // Navigation links often less important
-        
-        // Content weight
-        if (link.text.length > 10) score += 0.1;
-        if (link.context?.surrounding && link.context.surrounding.length > 50) score += 0.1;
-        
-        return score;
-    }
-    
-      private async streamResponse(prompt: string, updateCallback: (text: string) => void): Promise<void> {
-        let fullResponse = '';
-        let textBuffer = '';
-        try {
-        await this.llmInference.generateResponse(
-            prompt,
-            (partialResult: string, done: boolean) => {
-                textBuffer += partialResult;
-                if (done || textBuffer.length > 1024) {
-                    fullResponse += textBuffer;
-                    updateCallback(fullResponse);
-                    textBuffer = '';
-                    console.log(`[LLMManager] Streaming response: ${fullResponse.length} chars`);
-                    console.log(`[LLMManager] Streaming response: ${fullResponse}`);
 
-                }
-            }
-            
-        );
-        } catch (error) {
-          console.error('[LLMManager] Error during streaming response:', error);
-          throw error;
-        }
-}
 }

@@ -1,21 +1,22 @@
 {
   "compilerOptions": {
-    "target": "ES2020",
-    "module": "ES2020",
-    "lib": ["ES2020", "DOM", "DOM.Iterable"],
-    "strict": true,
+    "target": "es6",
+    "module": "commonjs",
+    "lib": ["es2020", "dom"],
+    "types": ["@webgpu/types"],
+    "moduleResolution": "node",
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "moduleResolution": "node",
-    "resolveJsonModule": true,
-    "isolatedModules": true,
-    "noEmit": true,
-    "outDir": "./dist",
-    "rootDir": "./src",
-    "typeRoots": ["./node_modules/@types", "./src/types"],
-    "types": ["chrome", "@webgpu/types"]
+    "strict": true,
+    "noImplicitAny": true,
+    "strictNullChecks": true,
+    "strictFunctionTypes": true,
+    "strictBindCallApply": true,
+    "strictPropertyInitialization": true,
+    "noImplicitThis": true,
+    "alwaysStrict": true
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules"]
+  "exclude": ["node_modules", "**/*.spec.ts"]
 }
