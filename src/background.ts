@@ -15,18 +15,18 @@ class BackgroundService {
         this.initialize();
     }
 
+
     private async initialize() {
         await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
         this.setupListeners();
     }
 
+
     private setupListeners() {
         chrome.tabs.onUpdated.addListener((tabId, info) => info.status === 'loading')
     }
 
-    
 }
 
-// Initialize the background service
 const backgroundService = new BackgroundService();
 export { backgroundService };
