@@ -38,7 +38,12 @@ export class LinkManager {
 
 
     public async rankLinks(links: Link[], requestId: number): Promise<Link[]> {
-        const filteredLinks = links.filter(link => !this.isUnwantedLink(link));
+        // Remove duplicates
+        const uniqueLinks = Array.from(new Set(links.map(link => link.href)))
+            .map(href => links.find(link => link.href === href))
+            .filter((link): link is Link => !!link);
+        // Filter unwanted links
+        const filteredLinks = uniqueLinks.filter(link => !this.isUnwantedLink(link));
         const rankedIds = await this.getLLMRanking(filteredLinks, requestId);
         return this.updateLinksWithRanking(filteredLinks, rankedIds, requestId);
     }
@@ -138,7 +143,7 @@ Return each ranking immediately as: ID:RANK (e.g. "5:9")`;
             href.includes('tracking') ||
             href.includes('utm_') ||
             href.includes('/ads/')) return true;
-        // UI elements
+        if (href.length > 120) return true;
         if (text.match(/^(menu|nav|skip|home|back|next|previous)$/i)) return true;
         // Social media
         if (text.match(/(share|tweet|pin it|follow)/i)) return true;
@@ -147,8 +152,6 @@ Return each ranking immediately as: ID:RANK (e.g. "5:9")`;
         // Timestamps
         if (text.match(/^\d+:\d+$/) || text.match(/^\d+ (minutes|hours|days) ago$/)) return true;
         // Length filters
-        if (text.length > 150 || text.length < 3) return true;
-        // Duplicates
         if (text.match(/\b(copy|duplicate|mirror)\b/i)) return true;
         return false;
     }
