@@ -57,6 +57,7 @@ export class LinkManager {
         return new Promise((resolve) => {
             this.llmManager.streamResponse(prompt, (partial) => {
                 if (requestId !== this.currentRequestId) return;
+                console.log('Partial response:', partial);
                 currentPartialResponse += partial;
                 this.processRankingResponse(currentPartialResponse, links, rankings, requestId);
                 currentPartialResponse = currentPartialResponse.split('\n').pop() || '';
@@ -70,16 +71,16 @@ export class LinkManager {
 
 
     private buildRankingPrompt(links: Link[]): string {
-        return `Rank only the most relevant, content-rich links by importance (1-10).
-Skip any promotional, sponsored, or duplicate content.
-Links to rank:
-${links.slice(0, 10).map(link => {
-    const context = link.context.surrounding.slice(0, 100);
-    const location = link.context.isInHeading ? '[heading]' : 
-                    link.context.isInMain ? '[main]' : '';
-    return `${link.id}: ${this.sanitizeTitle(link.text)} ${location}\nContext: ${context}\n`;
-}).join('\n')}
-Return each ranking immediately as: ID:RANK (e.g. "5:9")`;
+        return `For each link below, respond with ONLY an ID:RANK pair on each line (e.g. "5:9").
+    Do not include any other text or instructions.
+    Rank from 1-10 where 10 is most relevant.
+    Links:
+    ${links.slice(0, 10).map(link => {
+        const context = link.context.surrounding.slice(0, 100);
+        const location = link.context.isInHeading ? '[heading]' : 
+                        link.context.isInMain ? '[main]' : '';
+        return `${link.id}: ${this.sanitizeTitle(link.text)} ${location}\nContext: ${context}\n`;
+    }).join('\n')}`;
     }
 
 
@@ -153,6 +154,7 @@ Return each ranking immediately as: ID:RANK (e.g. "5:9")`;
         if (text.match(/^\d+:\d+$/) || text.match(/^\d+ (minutes|hours|days) ago$/)) return true;
         // Length filters
         if (text.match(/\b(copy|duplicate|mirror)\b/i)) return true;
+        console.log('Link is valid:', link);
         return false;
     }
 
