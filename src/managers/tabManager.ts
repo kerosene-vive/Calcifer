@@ -10,7 +10,7 @@ export class TabManager {
     private lastAnalyzedUrl: string = '';
     private linkManager: LinkManager;
     private popupManager: PopupManager;
-
+    private readonly MAX_LINKS = 100;
     private constructor(llmManager: LLMManager, popupManager: PopupManager) {
         this.linkManager = new LinkManager(llmManager, this.handleStatusUpdate.bind(this));
         this.popupManager = popupManager;
@@ -94,7 +94,7 @@ export class TabManager {
                             score: 0
                         }))
                         .filter(link => link.text.length > 0)
-                        .slice(0, 20)};}
+                        .slice(0, this.MAX_LINKS)};}
         });
         if (!result[0]?.result) {
             throw new Error('Failed to gather links');
