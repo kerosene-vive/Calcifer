@@ -20,11 +20,9 @@ interface Performance {
     };
 }
 
-
 export class LLMManager {
     private llmInference!: LlmInference;
     private streamController: AbortController | null = null;
-
     private loraModel: any = null;
     private debug: HTMLElement;
     private initRetryCount: number = 0;
@@ -38,13 +36,16 @@ export class LLMManager {
         this.onStatusUpdate = statusCallback;
     }
 
+
     public getLLMInference() {
         return this.llmInference;
     }
 
+
     public getLoraModel() {
         return this.loraModel;
     }
+
 
     public async initialize(): Promise<void> {
         await this.setupWebAssembly();
@@ -55,6 +56,7 @@ export class LLMManager {
             throw new Error("LLM initialization failed");
         }
     }
+
 
     private async setupWebAssembly(): Promise<void> {
         const script = document.createElement('script');
@@ -70,6 +72,7 @@ export class LLMManager {
         `;
         document.head.appendChild(script);
     }
+
 
     private patchWebGPU(): void {
         if (!navigator.gpu) return;
@@ -102,6 +105,7 @@ export class LLMManager {
         };
     }
 
+
     public async loadGenAIBundle(): Promise<void> {
         return new Promise(async (resolve, reject) => {
             try {
@@ -111,13 +115,11 @@ export class LLMManager {
                 wasmScript.type = 'text/javascript';
                 const nonce = crypto.randomUUID();
                 wasmScript.nonce = nonce;
-                
                 await new Promise<void>((resolveWasm, rejectWasm) => {
                     wasmScript.onload = () => resolveWasm();
                     wasmScript.onerror = (e) => rejectWasm(new Error(`Failed to load WASM internal: ${e}`));
                     document.head.appendChild(wasmScript);
                 });
-
                 try {
                     const moduleUrl = chrome.runtime.getURL('libs/genai_bundle.mjs');
                     const module = await import(moduleUrl);
@@ -146,24 +148,18 @@ export class LLMManager {
             if (!navigator.gpu) {
                 throw new Error('WebGPU not available');
             }
-            
             this.patchWebGPU();
-            
             if (!window.genaiModule) {
                 throw new Error('GenAI module not loaded');
             }
-
             const { FilesetResolver, LlmInference } = window.genaiModule;
             const genaiPath = chrome.runtime.getURL('libs');
-            
             const [adapter, genai, modelBlobUrl] = await Promise.all([
                 navigator.gpu.requestAdapter({ powerPreference: 'high-performance' }),
                 FilesetResolver.forGenAiTasks(genaiPath),
                 this.modelLoader.loadShardedWeights()
             ]);
-
             if (!adapter) throw new Error('No WebGPU adapter found');
-
             const device = await adapter.requestDevice({
                 requiredLimits: {
                     maxBindGroups: 4,
@@ -176,9 +172,7 @@ export class LLMManager {
                     maxStorageBufferBindingSize: 128 * 1024 * 1024
                 }
             });
-
             if (!device) throw new Error('Failed to create WebGPU device');
-
             this.llmInference = await LlmInference.createFromOptions(genai, {
                 baseOptions: {
                     modelAssetPath: modelBlobUrl,
@@ -208,16 +202,12 @@ export class LLMManager {
                     enableMemoryPlanning: true
                 }
             });
-
             if (!this.llmInference) throw new Error('LLM creation returned null');
-
             const loraBlobUrl = await this.modelLoader.loadLoraWeights();
             this.loraModel = await this.llmInference.loadLoraModel(loraBlobUrl);
-            
             URL.revokeObjectURL(modelBlobUrl);
             URL.revokeObjectURL(loraBlobUrl);
             if (window.gc) window.gc();
-            
         } catch (error) {
             if (error instanceof Error) {
                 console.error(`Initialization error: ${error.message}`, error);
@@ -228,13 +218,13 @@ export class LLMManager {
         }
     }
 
+
     public async safeInitialize(): Promise<void> {
         const memoryMonitor = setInterval(() => {
             if ((window.performance as Performance)?.memory) {
                 const memory = (window.performance as Performance).memory;
             }
         }, 5000);
-
         try {
             await this.initializeLLM();
         } catch (error) {
@@ -250,7 +240,8 @@ export class LLMManager {
             clearInterval(memoryMonitor);
         }
     }
-    
+
+
     async streamResponse(
         prompt: string,
         onUpdate: (text: string, isComplete: boolean) => void,
@@ -258,19 +249,14 @@ export class LLMManager {
       ): Promise<void> {
         this.streamController = new AbortController();
         const signal = this.streamController.signal;
-        
         let buffer = '';
-        const CHUNK_SIZE = 512; // Configurable chunk size
-        
+        const CHUNK_SIZE = 512;
         try {
           await this.llmInference.generateResponse(
             prompt,
             (chunk: string, isDone: boolean) => {
               if (signal.aborted) return;
-              
               buffer += chunk;
-              
-              // Stream chunks or when response is complete
               if (buffer.length >= CHUNK_SIZE || isDone) {
                 onUpdate(buffer, isDone);
                 buffer = isDone ? '' : buffer;
@@ -285,8 +271,10 @@ export class LLMManager {
           this.streamController = null;
         }
       }
-    
+
+
       cancelStream(): void {
         this.streamController?.abort();
       }
+
 }
