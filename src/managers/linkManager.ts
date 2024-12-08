@@ -1,4 +1,3 @@
-// linkManager.ts
 import { LLMManager } from './llmManager';
 import { Link } from './types';
 
@@ -12,106 +11,94 @@ export class LinkManager {
         this.onStatusUpdate = statusCallback;
     }
 
+    public async rankLinks(links: Link[], requestId: number): Promise<Link[]> {
+        console.log('[LinkManager] Starting ranking process');
+        this.currentRequestId = requestId;
 
-    private async sendPartialUpdate(links: Link[], requestId: number): Promise<void> {
-        chrome.runtime.sendMessage({
-            type: 'PARTIAL_LINKS_UPDATE',
-            links,
-            requestId
+        try {
+            // Get visible links
+            const visibleLinks = this.getVisibleLinks(links);
+            console.log('[LinkManager] Found visible links:', visibleLinks.length);
+
+            // Filter unwanted links
+            const filteredLinks = visibleLinks
+                .filter(link => !this.isUnwantedLink(link))
+                .slice(0, 10);
+
+            if (filteredLinks.length === 0) {
+                console.log('[LinkManager] No valid links found');
+                return [];
+            }
+
+            // Get LLM rankings
+            const rankedIds = await this.getLLMRanking(filteredLinks, requestId);
+            return this.updateLinksWithRanking(filteredLinks, rankedIds, requestId);
+
+        } catch (error) {
+            console.error('[LinkManager] Error in rankLinks:', error);
+            return links;
+        }
+    }
+
+    private getVisibleLinks(links: Link[]): Link[] {
+        return links.filter(link => {
+            if (!link.text?.trim()) return false;
+            if (!link.context?.position?.isVisible) return false;
+            if (!link.href || link.href.startsWith('#')) return false;
+            const top = link.context?.position?.top ?? Infinity;
+            return top <= 1000;
         });
     }
-
-
-    private updateLinksWithRanking(links: Link[], rankedIds: number[], requestId: number): Link[] {
-        const sortedLinks = rankedIds.map(id => {
-            const link = links.find(l => l.id === id);
-            if (link) {
-                link.score = 1 - (rankedIds.indexOf(id) / rankedIds.length);
-                this.onStatusUpdate(`Ranked link: ${link.text.slice(0, 30)}...`, true);
-            }
-            return link;
-        }).filter((link): link is Link => !!link);
-
-        // Sort the links by score in descending order
-        sortedLinks.sort((a, b) => b.score - a.score);
-
-        // Log the sorted links
-        console.log('Sorted Links:', sortedLinks);
-
-        this.sendPartialUpdate(sortedLinks, requestId);
-        return sortedLinks;
-    }
-
-
-    public async rankLinks(links: Link[], requestId: number): Promise<Link[]> {
-        // Remove duplicates
-        const uniqueLinks = Array.from(new Set(links.map(link => link.href)))
-            .map(href => links.find(link => link.href === href))
-            .filter((link): link is Link => !!link);
-        // Filter unwanted links
-        const filteredLinks = uniqueLinks.filter(link => !this.isUnwantedLink(link));
-        const rankedIds = await this.getLLMRanking(filteredLinks, requestId);
-        return this.updateLinksWithRanking(filteredLinks, rankedIds, requestId);
-    }
-
 
     private async getLLMRanking(links: Link[], requestId: number): Promise<number[]> {
         this.currentRequestId = requestId;
         const prompt = this.buildRankingPrompt(links);
+        console.log('[LinkManager] LLM prompt:', prompt);
         const rankings = new Map<number, number>();
         let currentPartialResponse = '';
+
         return new Promise((resolve) => {
-            this.llmManager.streamResponse(prompt, (partial) => {
-                if (requestId !== this.currentRequestId) return;
-                currentPartialResponse += partial;
-                console.log('Partial response:', currentPartialResponse); // Log partial response
-                this.processRankingResponse(currentPartialResponse, links, rankings, requestId);
-                currentPartialResponse = currentPartialResponse.split('\n').pop() || '';
-            }).then(() => {
-                if (rankings.size > 0) {
-                    console.log('Final rankings:', Array.from(rankings.entries())); // Log final rankings
-                    resolve(this.getFinalRanking(rankings, links));
-                } else {
-                    console.log('No valid rankings, falling back to default ranking'); // Log fallback
+            this.llmManager.streamResponse(
+                prompt,
+                (partial) => {
+                    if (requestId !== this.currentRequestId) return;
+                    currentPartialResponse += partial;
+                    console.log('[LinkManager] Partial response:', currentPartialResponse);
+                    this.processRankingResponse(currentPartialResponse, links, rankings, requestId);
+                    currentPartialResponse = currentPartialResponse.split('\n').pop() || '';
+                },
+                (error) => {
+                    console.error('[LinkManager] LLM error:', error);
                     resolve(this.getFallbackRanking(links));
                 }
-            }).catch((error) => {
-                console.error('Error in LLM ranking:', error); // Log error
-                resolve(this.getFallbackRanking(links));
+            ).then(() => {
+                if (rankings.size > 0) {
+                    const finalRanking = Array.from(rankings.entries())
+                        .sort((a, b) => b[1] - a[1])
+                        .map(([id]) => id);
+                    resolve(finalRanking);
+                } else {
+                    console.log('[LinkManager] No valid rankings, using fallback');
+                    resolve(this.getFallbackRanking(links));
+                }
             });
         });
     }
 
-
-    private buildRankingPrompt(links: Link[]): string {
-        const prompt = `For each link below, respond with ONLY an ID:RANK pair on each line (e.g. "5:9").
-    Do not include any other text or instructions.
-    Rank from 1-10 where 10 is most relevant.
-    Links:
-    ${links.slice(0, 10).map(link => {
-        const location = link.context.isInHeading ? '[heading]' : 
-                        link.context.isInMain ? '[main]' : '[other]';
-        return `${link.id}: ${this.sanitizeTitle(link.text)} ${location}\nURL: ${link.href}`;
-    }).join('\n\n')}`;
-    console.log('Ranking prompt:', prompt);
-    return prompt;
-}
-
-
     private processRankingResponse(response: string, links: Link[], rankings: Map<number, number>, requestId: number): void {
-        console.log('Processing ranking response:', response);
         const patterns = [
             /(\d+):(\d+)/g,
             /ID[:\s]+(\d+)[:\s]+(\d+)/g,
             /^(\d+)[\s,]+(\d+)$/gm
         ];
+
         for (const pattern of patterns) {
             const matches = response.matchAll(pattern);
             for (const match of matches) {
                 const id = parseInt(match[1]);
                 const rank = parseInt(match[2]);
                 if (this.isValidRanking(id, rank, links.length) && !rankings.has(id)) {
-                    console.log('Valid ranking:', id, rank);
+                    console.log('[LinkManager] Valid ranking:', id, rank);
                     rankings.set(id, rank);
                     this.updateLinkScore(links, id, rank, requestId);
                 }
@@ -119,17 +106,58 @@ export class LinkManager {
         }
     }
 
-
     private updateLinkScore(links: Link[], id: number, rank: number, requestId: number): void {
         const link = links.find(l => l.id === id);
         if (link) {
             link.score = rank / 10;
-            this.onStatusUpdate(`Ranked link: ${link.text.slice(0, 30)}...`, true);
-            console.log('Updated link:', link);
-            this.sendPartialUpdate(links, requestId);
+            this.onStatusUpdate(`Ranked: ${link.text.slice(0, 30)}`, true);
+            
+            // Sort links and update UI
+            const sortedLinks = [...links].sort((a, b) => (b.score || 0) - (a.score || 0));
+            this.sendPartialUpdate(sortedLinks, requestId);
         }
     }
 
+    private updateLinksWithRanking(links: Link[], rankedIds: number[], requestId: number): Link[] {
+        const sortedLinks = rankedIds.map(id => {
+            const link = links.find(l => l.id === id);
+            if (link) {
+                link.score = 1 - (rankedIds.indexOf(id) / rankedIds.length);
+                this.onStatusUpdate(`Ranked: ${link.text.slice(0, 30)}`, true);
+            }
+            return link;
+        }).filter((link): link is Link => !!link);
+
+        sortedLinks.sort((a, b) => b.score - a.score);
+        this.sendPartialUpdate(sortedLinks, requestId);
+        return sortedLinks;
+    }
+
+    private async sendPartialUpdate(links: Link[], requestId: number): Promise<void> {
+        if (this.currentRequestId !== requestId) return;
+        
+        try {
+            await chrome.runtime.sendMessage({
+                type: 'PARTIAL_LINKS_UPDATE',
+                links,
+                requestId
+            });
+        } catch (error) {
+            console.error('[LinkManager] Update error:', error);
+        }
+    }
+
+    private buildRankingPrompt(links: Link[]): string {
+        return `For each link below, respond with ONLY an ID:RANK pair on each line (e.g. "5:9").
+Do not include any other text or instructions.
+Rank from 1-10 where 10 is most relevant.
+Links:
+${links.map(link => {
+    const location = link.context.isInHeading ? '[heading]' : 
+                    link.context.isInMain ? '[main]' : '[other]';
+    return `${link.id}: ${this.sanitizeTitle(link.text)} ${location}\nURL: ${link.href}`;
+}).join('\n\n')}`;
+    }
 
     private isValidRanking(id: number, rank: number, maxId: number): boolean {
         return !isNaN(id) && !isNaN(rank) && 
@@ -137,85 +165,61 @@ export class LinkManager {
                rank >= 1 && rank <= 10;
     }
 
-
-    private getFinalRanking(rankings: Map<number, number>, links: Link[]): number[] {
-        if (rankings.size === 0) {
-            console.log('No valid rankings, falling back to default ranking');
-            return this.getFallbackRanking(links);
-        }
-        console.log('Final rankings:', rankings);
-        return Array.from(rankings.entries())
-            .sort((a, b) => b[1] - a[1])
-            .map(([id]) => id);
-    }
-
-
-    private isUnwantedLink(link: Link): boolean {
-        const text = (link.text || '').toLowerCase();
-        const href = (link.href || '').toLowerCase();
-        // Promotional/ad content
-        if (text.match(/\b(ad|ads|advert|sponsor|promotion|banner)\b/i)) return true;
-        if (text.match(/\b(€|£|\$)\s*\d+/)) return true;
-        // Tracking/analytics URLs
-        if (href.includes('googleadservices') || 
-            href.includes('doubleclick') ||
-            href.includes('analytics') ||
-            href.includes('tracking') ||
-            href.includes('utm_') ||
-            href.includes('/ads/')) return true;
-        if (href.length > 120) return true;
-        if (text.match(/^(menu|nav|skip|home|back|next|previous)$/i)) return true;
-        // Social media
-        if (text.match(/(share|tweet|pin it|follow)/i)) return true;
-        // Metadata
-        if (text.match(/\b(privacy|terms|cookie|copyright)\b/i)) return true;
-        // Timestamps
-        if (text.match(/^\d+:\d+$/) || text.match(/^\d+ (minutes|hours|days) ago$/)) return true;
-        // Length filters
-        if (text.match(/\b(copy|duplicate|mirror)\b/i)) return true;
-        console.log('Link is valid:', link);
-        return false;
-    }
-
-
     private getFallbackRanking(links: Link[]): number[] {
-        const scoredLinks = links.map((link, id) => ({
-            id,
-            score: this.calculateLinkScore(link)
-        }));
-    
-        return scoredLinks
+        return links
+            .map((link, id) => ({
+                id,
+                score: this.calculateLinkScore(link)
+            }))
             .sort((a, b) => b.score - a.score)
             .map(link => link.id);
     }
 
-
     private calculateLinkScore(link: Link): number {
         let score = 0;
-        // Position scoring
         if (link.context?.position?.isVisible) score += 0.3;
         if ((link.context?.position?.top ?? Infinity) < 500) score += 0.2;
-        // Context scoring
         if (link.context?.isInHeading) score += 0.25;
         if (link.context?.isInMain) score += 0.15;
         if (!link.context?.isInNav) score += 0.1;
-        // Content scoring
         if (link.text.length > 10) score += 0.1;
-        if (link.context?.surrounding && link.context.surrounding.length > 50) score += 0.1;
+        if (link.context?.surrounding?.length > 50) score += 0.1;
         return score;
     }
 
+    private isUnwantedLink(link: Link): boolean {
+        const text = (link.text || '').toLowerCase();
+        const href = (link.href || '').toLowerCase();
 
-    public sanitizeTitle(text: string): string {
-        return text.replace(/[»►▶→·|]/g, '')
-                  .replace(/\[\d+\]/g, '')
-                  .replace(/\s+/g, ' ')
-                  .replace(/\b\d+[KkMm]?\s*(views?|subscribers?|followers?)\b/gi, '')
-                  .replace(/\b(verified|sponsorizzato|•+)\b/gi, '')
-                  .replace(/\b\d+:\d+\b/g, '')
-                  .replace(/\b\d+ (minutes?|hours?|days?) ago\b/gi, '')
-                  .slice(0, 100)
-                  .trim();
+        return (
+            text.match(/\b(ad|ads|advert|sponsor|promotion|banner)\b/i) ||
+            text.match(/\b(€|£|\$)\s*\d+/) ||
+            href.includes('googleadservices') ||
+            href.includes('doubleclick') ||
+            href.includes('analytics') ||
+            href.includes('tracking') ||
+            href.includes('utm_') ||
+            href.includes('/ads/') ||
+            href.length > 120 ||
+            text.match(/^(menu|nav|skip|home|back|next|previous)$/i) ||
+            text.match(/(share|tweet|pin it|follow)/i) ||
+            text.match(/\b(privacy|terms|cookie|copyright)\b/i) ||
+            text.match(/^\d+:\d+$/) ||
+            text.match(/^\d+ (minutes|hours|days) ago$/) ||
+            text.match(/\b(copy|duplicate|mirror)\b/i)
+        );
     }
 
+    private sanitizeTitle(text: string): string {
+        return text
+            .replace(/[»►▶→·|]/g, '')
+            .replace(/\[\d+\]/g, '')
+            .replace(/\s+/g, ' ')
+            .replace(/\b\d+[KkMm]?\s*(views?|subscribers?|followers?)\b/gi, '')
+            .replace(/\b(verified|sponsorizzato|•+)\b/gi, '')
+            .replace(/\b\d+:\d+\b/g, '')
+            .replace(/\b\d+ (minutes?|hours?|days?) ago\b/gi, '')
+            .slice(0, 100)
+            .trim();
+    }
 }

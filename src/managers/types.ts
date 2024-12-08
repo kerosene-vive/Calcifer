@@ -13,5 +13,7 @@ export interface Link {
             isVisible: boolean;
         };
     };
+    isLLMRanked?: boolean;
+
     score: number;
 }

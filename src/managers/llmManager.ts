@@ -29,6 +29,13 @@ export class LLMManager {
     private readonly MAX_RETRIES = 3;
     private modelLoader: ModelLoader;
     private onStatusUpdate: (message: string, isLoading?: boolean) => void;
+    private requestQueue: Array<{
+        prompt: string,
+        callback: (text: string, isComplete: boolean) => void,
+        errorCallback?: (error: Error) => void
+    }> = [];
+    private isProcessing = false;
+    private currentOperation: AbortController | null = null;
 
     constructor(debugElement: HTMLElement, statusCallback: (message: string, isLoading?: boolean) => void) {
         this.debug = debugElement;
@@ -242,39 +249,64 @@ export class LLMManager {
     }
 
 
-    async streamResponse(
+      private async processQueue() {
+        if (this.isProcessing || this.requestQueue.length === 0 || !this.llmInference) {
+            return;
+        }
+
+        this.isProcessing = true;
+        const request = this.requestQueue.shift()!;
+        this.currentOperation = new AbortController();
+
+        try {
+            let response = '';
+            await this.llmInference.generateResponse(
+                request.prompt,
+                (chunk: string, isDone: boolean) => {
+                    if (this.currentOperation?.signal.aborted) return;
+                    response += chunk;
+                    request.callback(chunk, isDone);
+                }
+            );
+        } catch (error) {
+            if (request.errorCallback) {
+                request.errorCallback(error instanceof Error ? error : new Error(String(error)));
+            }
+        } finally {
+            this.currentOperation = null;
+            this.isProcessing = false;
+            // Add small delay before processing next request
+            setTimeout(() => this.processQueue(), 100);
+        }
+    }
+
+    public async streamResponse(
         prompt: string,
         onUpdate: (text: string, isComplete: boolean) => void,
         onError?: (error: Error) => void
-      ): Promise<void> {
-        this.streamController = new AbortController();
-        const signal = this.streamController.signal;
-        let buffer = '';
-        const CHUNK_SIZE = 512;
-        try {
-          await this.llmInference.generateResponse(
-            prompt,
-            (chunk: string, isDone: boolean) => {
-              if (signal.aborted) return;
-              buffer += chunk;
-              if (buffer.length >= CHUNK_SIZE || isDone) {
-                onUpdate(buffer, isDone);
-                buffer = isDone ? '' : buffer;
-              }
-            }
-          );
-        } catch (error) {
-          if (!signal.aborted) {
-            onError?.(error instanceof Error ? error : new Error(String(error)));
-          }
-        } finally {
-          this.streamController = null;
+    ): Promise<void> {
+        // Cancel any existing operation
+        if (this.currentOperation) {
+            this.currentOperation.abort();
         }
-      }
 
+        // Add to queue
+        this.requestQueue.push({
+            prompt,
+            callback: onUpdate,
+            errorCallback: onError
+        });
 
-      cancelStream(): void {
-        this.streamController?.abort();
-      }
+        // Start processing if not already
+        this.processQueue();
+    }
+
+    public cancelStream(): void {
+        if (this.currentOperation) {
+            this.currentOperation.abort();
+        }
+        // Clear the queue
+        this.requestQueue = [];
+    }
 
 }
