@@ -32,6 +32,12 @@ export class LinkManager {
             return link;
         }).filter((link): link is Link => !!link);
 
+        // Sort the links by score in descending order
+        sortedLinks.sort((a, b) => b.score - a.score);
+
+        // Log the sorted links
+        console.log('Sorted Links:', sortedLinks);
+
         this.sendPartialUpdate(sortedLinks, requestId);
         return sortedLinks;
     }
@@ -57,13 +63,20 @@ export class LinkManager {
         return new Promise((resolve) => {
             this.llmManager.streamResponse(prompt, (partial) => {
                 if (requestId !== this.currentRequestId) return;
-                console.log('Partial response:', partial);
                 currentPartialResponse += partial;
+                console.log('Partial response:', currentPartialResponse); // Log partial response
                 this.processRankingResponse(currentPartialResponse, links, rankings, requestId);
                 currentPartialResponse = currentPartialResponse.split('\n').pop() || '';
             }).then(() => {
-                resolve(this.getFinalRanking(rankings, links));
-            }).catch(() => {
+                if (rankings.size > 0) {
+                    console.log('Final rankings:', Array.from(rankings.entries())); // Log final rankings
+                    resolve(this.getFinalRanking(rankings, links));
+                } else {
+                    console.log('No valid rankings, falling back to default ranking'); // Log fallback
+                    resolve(this.getFallbackRanking(links));
+                }
+            }).catch((error) => {
+                console.error('Error in LLM ranking:', error); // Log error
                 resolve(this.getFallbackRanking(links));
             });
         });
@@ -71,20 +84,22 @@ export class LinkManager {
 
 
     private buildRankingPrompt(links: Link[]): string {
-        return `For each link below, respond with ONLY an ID:RANK pair on each line (e.g. "5:9").
+        const prompt = `For each link below, respond with ONLY an ID:RANK pair on each line (e.g. "5:9").
     Do not include any other text or instructions.
     Rank from 1-10 where 10 is most relevant.
     Links:
     ${links.slice(0, 10).map(link => {
-        const context = link.context.surrounding.slice(0, 100);
         const location = link.context.isInHeading ? '[heading]' : 
-                        link.context.isInMain ? '[main]' : '';
-        return `${link.id}: ${this.sanitizeTitle(link.text)} ${location}\nContext: ${context}\n`;
-    }).join('\n')}`;
-    }
+                        link.context.isInMain ? '[main]' : '[other]';
+        return `${link.id}: ${this.sanitizeTitle(link.text)} ${location}\nURL: ${link.href}`;
+    }).join('\n\n')}`;
+    console.log('Ranking prompt:', prompt);
+    return prompt;
+}
 
 
     private processRankingResponse(response: string, links: Link[], rankings: Map<number, number>, requestId: number): void {
+        console.log('Processing ranking response:', response);
         const patterns = [
             /(\d+):(\d+)/g,
             /ID[:\s]+(\d+)[:\s]+(\d+)/g,
@@ -96,6 +111,7 @@ export class LinkManager {
                 const id = parseInt(match[1]);
                 const rank = parseInt(match[2]);
                 if (this.isValidRanking(id, rank, links.length) && !rankings.has(id)) {
+                    console.log('Valid ranking:', id, rank);
                     rankings.set(id, rank);
                     this.updateLinkScore(links, id, rank, requestId);
                 }
@@ -109,6 +125,7 @@ export class LinkManager {
         if (link) {
             link.score = rank / 10;
             this.onStatusUpdate(`Ranked link: ${link.text.slice(0, 30)}...`, true);
+            console.log('Updated link:', link);
             this.sendPartialUpdate(links, requestId);
         }
     }
@@ -123,8 +140,10 @@ export class LinkManager {
 
     private getFinalRanking(rankings: Map<number, number>, links: Link[]): number[] {
         if (rankings.size === 0) {
+            console.log('No valid rankings, falling back to default ranking');
             return this.getFallbackRanking(links);
         }
+        console.log('Final rankings:', rankings);
         return Array.from(rankings.entries())
             .sort((a, b) => b[1] - a[1])
             .map(([id]) => id);
