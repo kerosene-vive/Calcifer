@@ -21,8 +21,6 @@ export class PopupManager {
     private activeTab: chrome.tabs.Tab | null = null;
     private currentRequestId: number | null = null;
     private initPromise: Promise<void> | null = null;
-
-    // Use singleton pattern for PopupManager as well
     public static getInstance(): PopupManager {
         if (!PopupManager.instance) {
             PopupManager.instance = new PopupManager();
@@ -39,14 +37,13 @@ export class PopupManager {
         this.setupListeners();
     }
 
+
     private setupListeners(): void {
         chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-            // Don't return early if not initialized - queue updates instead
             const handleMessage = async () => {
                 if (!this.initialized) {
                     await this.waitForInitialization();
                 }
-                
                 switch (message.type) {
                     case 'NEW_LINKS':
                         await this.handleNewLinks(
@@ -61,11 +58,11 @@ export class PopupManager {
                         break;
                 }
             };
-
             handleMessage().catch(console.error);
             return false;
         });
     }
+
 
     private async waitForInitialization(): Promise<void> {
         if (this.initialized) return;
@@ -76,33 +73,25 @@ export class PopupManager {
         await this.initialize();
     }
 
+
     public async initialize(): Promise<void> {
         if (this.initialized) return;
         if (this.initPromise) return this.initPromise;
-
         this.initPromise = (async () => {
             try {
                 this.handleStatusUpdate("Starting initialization...", true);
-                
-                // First initialize LLM
                 this.handleStatusUpdate("Initializing AI model...", true);
                 await this.llmManager.initialize();
-
-                // Then get active tab
                 this.handleStatusUpdate("Getting active tab...", true);
                 const [tab] = await chrome.tabs.query({ 
                     active: true, 
                     currentWindow: true 
                 });
-
                 if (!tab?.url) {
                     throw new Error("No active tab found");
                 }
-
                 this.activeTab = tab;
                 this.initialized = true;
-
-                // Start page analysis
                 this.handleStatusUpdate("Starting page analysis...", true);
                 await this.updateUIForTab(tab);
 
@@ -113,13 +102,12 @@ export class PopupManager {
                 throw error;
             }
         })();
-
         return this.initPromise;
     }
 
+
     private async updateUIForTab(tab: chrome.tabs.Tab): Promise<void> {
         if (!tab.url) return;
-
         try {
             this.uiManager.clearLinks();
             this.handleStatusUpdate("Analyzing page content...", true);
@@ -133,6 +121,7 @@ export class PopupManager {
         }
     }
 
+
     public async handleNewLinks(
         links: Link[], 
         url: string, 
@@ -140,23 +129,19 @@ export class PopupManager {
         error?: string
     ): Promise<void> {
         this.currentRequestId = requestId;
-
         if (error) {
             this.uiManager.displayLinks([]);
             this.handleStatusUpdate(`Error: ${error}`, false);
             return;
         }
-
         if (!links?.length) {
             this.uiManager.displayLinks([]);
             this.handleStatusUpdate("No links found", false);
             return;
         }
-
         const sortedLinks = [...links]
             .filter(link => link.score > 0)
             .sort((a, b) => b.score - a.score);
-
         this.uiManager.displayLinks(sortedLinks);
         this.handleStatusUpdate(
             sortedLinks.length > 0 ? "Analysis complete" : "No relevant links found", 
@@ -164,25 +149,24 @@ export class PopupManager {
         );
     }
 
+
     private handlePartialUpdate(links: Link[], requestId: number): void {
         if (requestId !== this.currentRequestId) return;
-
         const sortedLinks = [...links]
             .filter(link => link.score > 0)
             .sort((a, b) => b.score - a.score);
-
         if (sortedLinks.length > 0) {
             this.uiManager.displayLinks(sortedLinks);
             this.handleStatusUpdate("Processing links...", true);
         }
     }
 
+
     private handleStatusUpdate(message: string, isLoading = true): void {
         this.uiManager.handleLoadingStatus(message, isLoading);
     }
 }
 
-// Update the initialization code
 document.addEventListener('DOMContentLoaded', async () => {
     try {
         const manager = PopupManager.getInstance();
