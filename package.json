@@ -16,7 +16,7 @@
   "devDependencies": {
     "@parcel/config-webextension": "^2.9.3",
     "@types/chrome": "^0.0.242",
-    "@types/node": "^22.10.0",
+    "@types/node": "^22.10.1",
     "@webgpu/types": "^0.1.51",
     "buffer": "^6.0.3",
     "crypto-browserify": "^3.12.1",
