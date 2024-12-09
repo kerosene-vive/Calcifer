@@ -37,30 +37,44 @@ export class LinkManager {
 
     private async getLLMRanking(links: Link[], requestId: number): Promise<number[]> {
         this.currentRequestId = requestId;
-        const prompt = this.buildRankingPrompt(links);
-        const rankings = new Map<number, number>();
-        let fullResponse = '';
-
-        return new Promise((resolve, reject) => {
-            this.llmManager.streamResponse(
-                prompt,
-                (partial, isDone) => {
-                    if (requestId !== this.currentRequestId) return;
-                    
-                    fullResponse += partial;
-                    this.processRankingResponse(fullResponse, links, rankings, requestId);
-                    
-                    if (isDone) {
-                        resolve(this.getFinalRanking(rankings, links));
+        const seenIds = new Set<number>();
+        const allRankedIds: number[] = [];
+        this.currentRequestId = requestId;
+        const sortedLinks: Link[] = [];
+    
+        
+        const prompt = `List IDs from most to least relevant:
+    ${links.map(l => `ID:${l.id}: ${this.sanitizeTitle(l.text)}\n`).join('')}
+    Required format: Start your response with "RANKING:" followed by all IDs in a single comma-separated list.
+Example: RANKING: 4,2,1,3,5`;
+        console.log(prompt);
+return new Promise((resolve) => {
+    this.llmManager.streamResponse(
+        prompt,
+        (partial) => {
+            if (requestId !== this.currentRequestId) return;
+            
+            const nums = partial.match(/\d+/g)?.map(Number) || [];
+            for (const id of nums) {
+                if (!seenIds.has(id) && links.some(l => l.id === id)) {
+                    seenIds.add(id);
+                    const link = links.find(l => l.id === id);
+                    if (link) {
+                        link.score = 1 - (sortedLinks.length / links.length);
+                        sortedLinks.push(link);
+                        console.log(id);
+                        console.log(`Ranked: ${link.text.slice(0, 30)}...`);
+                        this.sendPartialUpdate(sortedLinks, requestId);
                     }
-                },
-                (error) => {
-                    console.error('Ranking error:', error);
-                    resolve(this.getFallbackRanking(links));
                 }
-            );
-        });
-    }
+            }
+        },
+        error => resolve(this.getFallbackRanking(links))
+    ).then(() => {
+        resolve([...Array.from(seenIds), ...links.map(l => l.id).filter(id => !seenIds.has(id))]);
+    });
+});
+}
 
     private buildRankingPrompt(links: Link[]): string {
         const linkDescriptions = links.map(link => {
