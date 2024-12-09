@@ -140,7 +140,7 @@ export class TabManager {
                 return;
             }
 
-            const rankedLinks = await this.linkManager.rankLinks(links, requestId);
+            const rankedLinks = await this.linkManager.processLinks(links, requestId);
             
             if (requestId === this.currentRequestId) {
                 this.lastAnalyzedUrl = url;
