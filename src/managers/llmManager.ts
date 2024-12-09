@@ -12,6 +12,7 @@ declare global {
     }
 }
 
+
 interface Performance {
     memory?: {
         usedJSHeapSize: number;
@@ -25,18 +26,15 @@ export class LLMManager {
     private debug: HTMLElement;
     private modelLoader: ModelLoader | null = null;
     private onStatusUpdate: (message: string, isLoading?: boolean) => void;
-
     // Core components
     private llmInference!: LlmInference;
     private streamController: AbortController | null = null;
     private loraModel: LoraModel | null = null;
     private device: GPUDevice | null = null;
-    
     // State management
     private isInitialized = false;
     private initPromise: Promise<void> | null = null;
     private isDeviceLost = false;
-
     // Retry count for initialization
     private initRetryCount = 0;
     private readonly MAX_RETRIES = 3;
@@ -50,43 +48,42 @@ export class LLMManager {
         return LLMManager.instance;
     }
 
+
     public constructor(debugElement: HTMLElement, statusCallback: (message: string, isLoading?: boolean) => void) {
         this.debug = debugElement;
         this.onStatusUpdate = statusCallback;
     }
 
+
     public getLLMInference() {
         return this.llmInference;
     }
+
 
     public getLoraModel() {
         return this.loraModel;
     }
 
+
     public async initialize(): Promise<void> {
         if (this.isInitialized) return;
         if (this.initPromise) return this.initPromise;
-
         this.initPromise = (async () => {
             try {
                 this.modelLoader = new ModelLoader(this.debug);
                 this.onStatusUpdate("Setting up WebAssembly...", true);
                 await this.setupWebAssembly();
-
                 this.onStatusUpdate("Loading AI models...", true);
                 await this.loadGenAIBundle();
                 this.patchWebGPU();
-
                 this.onStatusUpdate("Initializing GPU...", true);
                 await this.setupDevice();
-
                 this.onStatusUpdate("Preparing model...", true);
                 const adapter = await navigator.gpu.requestAdapter({
                     powerPreference: 'high-performance'
                 });
                 if (!adapter) throw new Error('No GPU adapter found');
                 await this.initializeModel(adapter);
-
                 this.isInitialized = true;
                 this.onStatusUpdate("Ready", false);
             } catch (error) {
@@ -95,23 +92,19 @@ export class LLMManager {
                 throw error;
             }
         })();
-
         return this.initPromise;
     }
 
+
     private async setupDevice(): Promise<void> {
         if (!navigator.gpu) throw new Error('WebGPU not supported');
-
         const adapter = await navigator.gpu.requestAdapter({
             powerPreference: 'high-performance'
         });
-
         if (!adapter) throw new Error('No GPU adapter found');
-
         this.device = await adapter.requestDevice({
             requiredLimits: this.DEVICE_LIMITS
         });
-
         this.device?.lost.then(async () => {
             this.isDeviceLost = true;
             this.isInitialized = false;
@@ -119,6 +112,7 @@ export class LLMManager {
             // Don't auto-reinitialize - wait for next request
         });
     }
+
 
     async streamResponse(
         prompt: string,
@@ -128,10 +122,8 @@ export class LLMManager {
         if (!this.isInitialized || this.isDeviceLost) {
             await this.initialize();
         }
-
         this.streamController = new AbortController();
         const signal = this.streamController.signal;
-
         try {
             let buffer = '';
             const processChunk = (chunk: string, isDone: boolean) => {
@@ -142,7 +134,6 @@ export class LLMManager {
                     buffer = '';
                 }
             };
-
             await this.llmInference.generateResponse(prompt, processChunk);
         } catch (error) {
             if (!signal?.aborted) {
@@ -153,25 +144,13 @@ export class LLMManager {
         }
     }
 
-    // Keep only essential utility methods
-   
+
     public cancelStream = () => {
         if (this.streamController) {
             this.streamController.abort();
             this.streamController = null;
         }
     };
-    // Single initialization status tracker
-    private readonly initStatus = {
-        webAssemblyDone: false,
-        genAIBundleDone: false,
-        deviceSetupDone: false,
-        modelLoadDone: false
-    };
-
- 
-
-
 
 
     private async setupWebAssembly(): Promise<void> {
@@ -188,6 +167,7 @@ export class LLMManager {
         `;
         document.head.appendChild(script);
     }
+
 
     private patchWebGPU(): void {
         if (!navigator.gpu) return;
@@ -220,6 +200,7 @@ export class LLMManager {
         };
     }
 
+
     public async loadGenAIBundle(): Promise<void> {
         return new Promise(async (resolve, reject) => {
             try {
@@ -229,16 +210,13 @@ export class LLMManager {
                 wasmScript.type = 'text/javascript';
                 const nonce = crypto.randomUUID();
                 wasmScript.nonce = nonce;
-
                 await new Promise<void>((resolveWasm, rejectWasm) => {
                     wasmScript.onload = () => resolveWasm();
                     wasmScript.onerror = (e) => rejectWasm(new Error(`Failed to load WASM internal: ${e}`));
                     document.head.appendChild(wasmScript);
                 });
-
                 const moduleUrl = chrome.runtime.getURL('libs/genai_bundle.mjs');
                 const module = await import(moduleUrl);
-                
                 if (module) {
                     window.genaiModule = module;
                     resolve();
@@ -252,7 +230,6 @@ export class LLMManager {
         });
     }
 
-   
 
     public async safeInitialize(): Promise<void> {
         const memoryMonitor = setInterval(() => {
@@ -261,7 +238,6 @@ export class LLMManager {
                 // Memory monitoring logic here if needed
             }
         }, 5000);
-
         try {
             await this.initializeLLM();
         } catch (error) {
@@ -278,7 +254,7 @@ export class LLMManager {
         }
     }
     
-    
+
     async streamResponseWithFallback(
             prompt: string,
             onUpdate: (text: string, isComplete: boolean) => void,
@@ -297,10 +273,7 @@ export class LLMManager {
             }
         }
     
-    
-        
-   
-    // Add device lost handler
+
     private setupDeviceLostHandler(device: GPUDevice) {
         device.lost.then((info) => {
             console.error('WebGPU device lost:', info);
@@ -311,19 +284,15 @@ export class LLMManager {
         });
     }
 
-    
 
-   
     private async initializeModel(adapter: GPUAdapter): Promise<void> {
         if (!window.genaiModule) throw new Error('GenAI module not loaded');
         if (!this.device) throw new Error('GPU device not initialized');
-    
         const genaiPath = chrome.runtime.getURL('libs');
         const [genai, modelBlobUrl] = await Promise.all([
             FilesetResolver.forGenAiTasks(genaiPath),
             this.modelLoader?.loadShardedWeights() ?? Promise.reject(new Error('ModelLoader is null'))
         ]);
-    
         try {
             // Configure based on actual model parameters from logs
             this.llmInference = await LlmInference.createFromOptions(genai, {
@@ -335,13 +304,10 @@ export class LLMManager {
                         adapterInfo: await adapter.requestAdapterInfo()
                     }
                 },
-                // Model configuration based on logs
                 maxTokens: 1000,
                 topK: 3,
                 temperature: 0.8,
-                // Supported LoRA ranks from logs (excluding 32)
                 loraRanks: [4, 8, 16, 32],
-                // Model-specific parameters from logs
                 modelConfig: {
                     batchSize: 1,
                     modelDimension: 2048,
@@ -358,18 +324,8 @@ export class LLMManager {
                     skipAbsolutePositionalEmbeddings: false
                 }
             });
-    
             if (!this.llmInference) {
                 throw new Error('LLM creation returned null');
-            }
-    
-            // Load LoRA weights
-            if (!this.modelLoader) {
-                throw new Error('ModelLoader is null');
-            }
-            
-            if (!this.modelLoader) {
-                throw new Error('ModelLoader is null');
             }
             if (!this.modelLoader) {
                 throw new Error('ModelLoader is null');
@@ -380,16 +336,12 @@ export class LLMManager {
             } catch (error) {
                 console.warn('LoRA loading failed, continuing without LoRA:', error);
             }
-    
         } catch (error) {
             console.error('Model initialization failed:', error);
             throw error;
         } finally {
-            // Cleanup
             URL.revokeObjectURL(modelBlobUrl);
             if (this.loraModel) {
-
-            // Load LoRA weights
             if (!this.modelLoader) {
                 throw new Error('ModelLoader is null');
             }
@@ -401,9 +353,7 @@ export class LLMManager {
             if (window.gc) window.gc();
         }
     }
-    
-    // Update device limits based on optimization guide
-    private readonly DEVICE_LIMITS = {
+        private readonly DEVICE_LIMITS = {
         maxBindGroups: 4,
         maxBindingsPerBindGroup: 8,
         maxBufferSize: 128 * 1024 * 1024,  // 128MB for better stability
@@ -413,42 +363,23 @@ export class LLMManager {
         maxComputeWorkgroupsPerDimension: 16384,
         maxStorageBufferBindingSize: 64 * 1024 * 1024  // 64MB for stability
     };
-    
-    // Add configuration validation
-    private validateModelConfig(config: any): void {
-        if (config.loraRanks?.includes(32)) {
-            console.warn('Removing unsupported LoRA rank 32');
-            config.loraRanks = config.loraRanks.filter((rank: number) => rank !== 32);
-        }
-        
-        // Validate other critical parameters
-        if (config.maxTokens > 2048) {
-            console.warn('Reducing maxTokens to prevent OOM');
-            config.maxTokens = 2048;
-        }
-    }
-    // Update initializeLLM to use device lost handler
+
+
     private async initializeLLM(): Promise<void> {
         try {
             if (!navigator.gpu) {
                 throw new Error('WebGPU not available');
             }
-            
             this.patchWebGPU();
-            
             if (!window.genaiModule) {
                 throw new Error('GenAI module not loaded');
             }
-
             const { FilesetResolver, LlmInference } = window.genaiModule;
             const genaiPath = chrome.runtime.getURL('libs');
-            
             const adapter = await navigator.gpu.requestAdapter({
                 powerPreference: 'high-performance'
             });
-
             if (!adapter) throw new Error('No WebGPU adapter found');
-
             const device = await adapter.requestDevice({
                 requiredLimits: {
                     maxBindGroups: 4,
@@ -461,17 +392,12 @@ export class LLMManager {
                     maxStorageBufferBindingSize: 128 * 1024 * 1024
                 }
             });
-
             if (!this.device) throw new Error('Failed to create WebGPU device');
-
-            // Set up device lost handler
             this.setupDeviceLostHandler(this.device);
-
             const [genai, modelBlobUrl] = await Promise.all([
                 FilesetResolver.forGenAiTasks(genaiPath),
                 this.modelLoader?.loadShardedWeights() ?? Promise.reject(new Error('ModelLoader is null'))
             ]);
-
             this.llmInference = await LlmInference.createFromOptions(genai, {
                 baseOptions: {
                     modelAssetPath: modelBlobUrl,
@@ -503,20 +429,19 @@ export class LLMManager {
             });
 
             if (!this.llmInference) throw new Error('LLM creation returned null');
-
+            if (!this.modelLoader) {
+                throw new Error('ModelLoader is null');
+            }
             const loraBlobUrl = await this.modelLoader.loadLoraWeights();
             this.loraModel = await this.llmInference.loadLoraModel(loraBlobUrl);
-            
             URL.revokeObjectURL(modelBlobUrl);
             URL.revokeObjectURL(loraBlobUrl);
             if (window.gc) window.gc();
-            
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
             throw new Error(`LLM initialization failed: ${errorMessage}`);
         }
     }
-   
 
 
     private async reinitializeDevice(): Promise<void> {
@@ -524,9 +449,7 @@ export class LLMManager {
             const adapter = await navigator.gpu.requestAdapter({
                 powerPreference: 'high-performance'
             });
-            
             if (!adapter) throw new Error('No WebGPU adapter found');
-    
             this.device = await adapter.requestDevice({
                 requiredLimits: {
                     maxBindGroups: 4,
@@ -539,15 +462,11 @@ export class LLMManager {
                     maxStorageBufferBindingSize: 256 * 1024 * 1024
                 }
             });
-    
             if (this.device) {
-                // Set up device lost handler with recovery
                 this.device.lost.then(async (info) => {
                     console.warn('WebGPU device lost:', info);
                     this.isDeviceLost = true;
                     this.device = null;
-                    
-                    // Attempt recovery
                     try {
                         await this.reinitializeDevice();
                         this.isDeviceLost = false;
@@ -562,6 +481,4 @@ export class LLMManager {
         }
     }
 
-   
-
-    }
+}
