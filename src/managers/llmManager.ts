@@ -1,13 +1,13 @@
 import { ModelLoader } from '../model/modelLoader.js';
-import { LlmInference } from '../libs/genai_bundle.mjs';
+import { LlmInference, FilesetResolver, LoraModel } from '../libs/genai_bundle.mjs';
 
 declare global {
     interface Window {
         ModuleFactory: any;
         gc?: () => void;
         genaiModule?: {
-            FilesetResolver: any;
-            LlmInference: any;
+            FilesetResolver: typeof FilesetResolver;
+            LlmInference: typeof LlmInference;
         };
     }
 }
@@ -20,21 +20,38 @@ interface Performance {
     };
 }
 
-
 export class LLMManager {
-    private llmInference!: LlmInference;
-    private streamController: AbortController | null = null;
-
-    private loraModel: any = null;
+    private static instance: LLMManager | null = null;
     private debug: HTMLElement;
-    private initRetryCount: number = 0;
-    private readonly MAX_RETRIES = 3;
-    private modelLoader: ModelLoader;
+    private modelLoader: ModelLoader | null = null;
     private onStatusUpdate: (message: string, isLoading?: boolean) => void;
 
-    constructor(debugElement: HTMLElement, statusCallback: (message: string, isLoading?: boolean) => void) {
+    // Core components
+    private llmInference!: LlmInference;
+    private streamController: AbortController | null = null;
+    private loraModel: LoraModel | null = null;
+    private device: GPUDevice | null = null;
+    
+    // State management
+    private isInitialized = false;
+    private initPromise: Promise<void> | null = null;
+    private isDeviceLost = false;
+
+    // Retry count for initialization
+    private initRetryCount = 0;
+    private readonly MAX_RETRIES = 3;
+
+    
+
+    static getInstance(debugElement: HTMLElement, statusCallback: (message: string, isLoading?: boolean) => void): LLMManager {
+        if (!LLMManager.instance) {
+            LLMManager.instance = new LLMManager(debugElement, statusCallback);
+        }
+        return LLMManager.instance;
+    }
+
+    public constructor(debugElement: HTMLElement, statusCallback: (message: string, isLoading?: boolean) => void) {
         this.debug = debugElement;
-        this.modelLoader = new ModelLoader(this.debug);
         this.onStatusUpdate = statusCallback;
     }
 
@@ -47,14 +64,115 @@ export class LLMManager {
     }
 
     public async initialize(): Promise<void> {
-        await this.setupWebAssembly();
-        await this.loadGenAIBundle();
-        await this.safeInitialize();
-        
-        if (!this.llmInference) {
-            throw new Error("LLM initialization failed");
+        if (this.isInitialized) return;
+        if (this.initPromise) return this.initPromise;
+
+        this.initPromise = (async () => {
+            try {
+                this.modelLoader = new ModelLoader(this.debug);
+                this.onStatusUpdate("Setting up WebAssembly...", true);
+                await this.setupWebAssembly();
+
+                this.onStatusUpdate("Loading AI models...", true);
+                await this.loadGenAIBundle();
+                this.patchWebGPU();
+
+                this.onStatusUpdate("Initializing GPU...", true);
+                await this.setupDevice();
+
+                this.onStatusUpdate("Preparing model...", true);
+                const adapter = await navigator.gpu.requestAdapter({
+                    powerPreference: 'high-performance'
+                });
+                if (!adapter) throw new Error('No GPU adapter found');
+                await this.initializeModel(adapter);
+
+                this.isInitialized = true;
+                this.onStatusUpdate("Ready", false);
+            } catch (error) {
+                this.initPromise = null;
+                this.isInitialized = false;
+                throw error;
+            }
+        })();
+
+        return this.initPromise;
+    }
+
+    private async setupDevice(): Promise<void> {
+        if (!navigator.gpu) throw new Error('WebGPU not supported');
+
+        const adapter = await navigator.gpu.requestAdapter({
+            powerPreference: 'high-performance'
+        });
+
+        if (!adapter) throw new Error('No GPU adapter found');
+
+        this.device = await adapter.requestDevice({
+            requiredLimits: this.DEVICE_LIMITS
+        });
+
+        this.device?.lost.then(async () => {
+            this.isDeviceLost = true;
+            this.isInitialized = false;
+            this.device = null;
+            // Don't auto-reinitialize - wait for next request
+        });
+    }
+
+    async streamResponse(
+        prompt: string,
+        onUpdate: (text: string, isComplete: boolean) => void,
+        onError?: (error: Error) => void
+    ): Promise<void> {
+        if (!this.isInitialized || this.isDeviceLost) {
+            await this.initialize();
+        }
+
+        this.streamController = new AbortController();
+        const signal = this.streamController.signal;
+
+        try {
+            let buffer = '';
+            const processChunk = (chunk: string, isDone: boolean) => {
+                if (signal.aborted) return;
+                buffer += chunk;
+                if (buffer.length >= 32 || isDone) {
+                    onUpdate(buffer, isDone);
+                    buffer = '';
+                }
+            };
+
+            await this.llmInference.generateResponse(prompt, processChunk);
+        } catch (error) {
+            if (!signal?.aborted) {
+                onError?.(error instanceof Error ? error : new Error(String(error)));
+            }
+        } finally {
+            this.streamController = null;
         }
     }
+
+    // Keep only essential utility methods
+   
+    public cancelStream = () => {
+        if (this.streamController) {
+            this.streamController.abort();
+            this.streamController = null;
+        }
+    };
+    // Single initialization status tracker
+    private readonly initStatus = {
+        webAssemblyDone: false,
+        genAIBundleDone: false,
+        deviceSetupDone: false,
+        modelLoadDone: false
+    };
+
+ 
+
+
+
 
     private async setupWebAssembly(): Promise<void> {
         const script = document.createElement('script');
@@ -111,28 +229,21 @@ export class LLMManager {
                 wasmScript.type = 'text/javascript';
                 const nonce = crypto.randomUUID();
                 wasmScript.nonce = nonce;
-                
+
                 await new Promise<void>((resolveWasm, rejectWasm) => {
                     wasmScript.onload = () => resolveWasm();
                     wasmScript.onerror = (e) => rejectWasm(new Error(`Failed to load WASM internal: ${e}`));
                     document.head.appendChild(wasmScript);
                 });
 
-                try {
-                    const moduleUrl = chrome.runtime.getURL('libs/genai_bundle.mjs');
-                    const module = await import(moduleUrl);
-                    if (module) {
-                        window.genaiModule = module;
-                        resolve();
-                    } else {
-                        throw new Error('Module loaded but contents are missing');
-                    }
-                } catch (importError) {
-                    if (importError instanceof Error) {
-                        throw new Error(`Failed to import main module: ${importError.message}`);
-                    } else {
-                        throw new Error('Failed to import main module: Unknown error');
-                    }
+                const moduleUrl = chrome.runtime.getURL('libs/genai_bundle.mjs');
+                const module = await import(moduleUrl);
+                
+                if (module) {
+                    window.genaiModule = module;
+                    resolve();
+                } else {
+                    throw new Error('Module loaded but contents are missing');
                 }
             } catch (error) {
                 const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -141,6 +252,182 @@ export class LLMManager {
         });
     }
 
+   
+
+    public async safeInitialize(): Promise<void> {
+        const memoryMonitor = setInterval(() => {
+            if ((window.performance as Performance)?.memory) {
+                const memory = (window.performance as Performance).memory;
+                // Memory monitoring logic here if needed
+            }
+        }, 5000);
+
+        try {
+            await this.initializeLLM();
+        } catch (error) {
+            if (this.initRetryCount < this.MAX_RETRIES) {
+                this.initRetryCount++;    
+                if (window.gc) window.gc();
+                await new Promise(resolve => setTimeout(resolve, 2000 * this.initRetryCount));
+                await this.safeInitialize();
+            } else {
+                throw error;
+            }
+        } finally {
+            clearInterval(memoryMonitor);
+        }
+    }
+    
+    
+    async streamResponseWithFallback(
+            prompt: string,
+            onUpdate: (text: string, isComplete: boolean) => void,
+            onError?: (error: Error) => void
+        ): Promise<void> {
+            try {
+                await this.streamResponse(prompt, onUpdate, onError);
+            } catch (error) {
+                // Fallback to simpler processing if optimized version fails
+                try {
+                    const result = await this.llmInference.generateResponse(prompt);
+                    onUpdate(result, true);
+                } catch (fallbackError) {
+                    onError?.(fallbackError instanceof Error ? fallbackError : new Error(String(fallbackError)));
+                }
+            }
+        }
+    
+    
+        
+   
+    // Add device lost handler
+    private setupDeviceLostHandler(device: GPUDevice) {
+        device.lost.then((info) => {
+            console.error('WebGPU device lost:', info);
+            this.isDeviceLost = true;
+            this.device = null;
+            // Optionally trigger device recreation
+            this.reinitializeDevice();
+        });
+    }
+
+    
+
+   
+    private async initializeModel(adapter: GPUAdapter): Promise<void> {
+        if (!window.genaiModule) throw new Error('GenAI module not loaded');
+        if (!this.device) throw new Error('GPU device not initialized');
+    
+        const genaiPath = chrome.runtime.getURL('libs');
+        const [genai, modelBlobUrl] = await Promise.all([
+            FilesetResolver.forGenAiTasks(genaiPath),
+            this.modelLoader?.loadShardedWeights() ?? Promise.reject(new Error('ModelLoader is null'))
+        ]);
+    
+        try {
+            // Configure based on actual model parameters from logs
+            this.llmInference = await LlmInference.createFromOptions(genai, {
+                baseOptions: {
+                    modelAssetPath: modelBlobUrl,
+                    delegate: "GPU",
+                    gpuOptions: {
+                        device: this.device,
+                        adapterInfo: await adapter.requestAdapterInfo()
+                    }
+                },
+                // Model configuration based on logs
+                maxTokens: 1000,
+                topK: 3,
+                temperature: 0.8,
+                // Supported LoRA ranks from logs (excluding 32)
+                loraRanks: [4, 8, 16, 32],
+                // Model-specific parameters from logs
+                modelConfig: {
+                    batchSize: 1,
+                    modelDimension: 2048,
+                    hiddenDimension: 12288,
+                    headDimension: 256,
+                    numberOfHeads: 8,
+                    numberOfKVHeads: 1,
+                    vocabularySize: 256128,
+                    stackSize: 32,
+                    attentionMaskType: 1,
+                    postNormFF: true,
+                    postNormAttention: true,
+                    attentionScaleType: 2,
+                    skipAbsolutePositionalEmbeddings: false
+                }
+            });
+    
+            if (!this.llmInference) {
+                throw new Error('LLM creation returned null');
+            }
+    
+            // Load LoRA weights
+            if (!this.modelLoader) {
+                throw new Error('ModelLoader is null');
+            }
+            
+            if (!this.modelLoader) {
+                throw new Error('ModelLoader is null');
+            }
+            if (!this.modelLoader) {
+                throw new Error('ModelLoader is null');
+            }
+            const loraBlobUrl = await this.modelLoader.loadLoraWeights();
+            try {
+                this.loraModel = await this.llmInference.loadLoraModel(loraBlobUrl);
+            } catch (error) {
+                console.warn('LoRA loading failed, continuing without LoRA:', error);
+            }
+    
+        } catch (error) {
+            console.error('Model initialization failed:', error);
+            throw error;
+        } finally {
+            // Cleanup
+            URL.revokeObjectURL(modelBlobUrl);
+            if (this.loraModel) {
+
+            // Load LoRA weights
+            if (!this.modelLoader) {
+                throw new Error('ModelLoader is null');
+            }
+                const loraBlobUrl = await this.modelLoader.loadLoraWeights();
+                if (this.loraModel) {
+                    URL.revokeObjectURL(loraBlobUrl);
+                }
+            }
+            if (window.gc) window.gc();
+        }
+    }
+    
+    // Update device limits based on optimization guide
+    private readonly DEVICE_LIMITS = {
+        maxBindGroups: 4,
+        maxBindingsPerBindGroup: 8,
+        maxBufferSize: 128 * 1024 * 1024,  // 128MB for better stability
+        maxComputeInvocationsPerWorkgroup: 128,
+        maxComputeWorkgroupSizeX: 128,
+        maxComputeWorkgroupSizeY: 128,
+        maxComputeWorkgroupsPerDimension: 16384,
+        maxStorageBufferBindingSize: 64 * 1024 * 1024  // 64MB for stability
+    };
+    
+    // Add configuration validation
+    private validateModelConfig(config: any): void {
+        if (config.loraRanks?.includes(32)) {
+            console.warn('Removing unsupported LoRA rank 32');
+            config.loraRanks = config.loraRanks.filter((rank: number) => rank !== 32);
+        }
+        
+        // Validate other critical parameters
+        if (config.maxTokens > 2048) {
+            console.warn('Reducing maxTokens to prevent OOM');
+            config.maxTokens = 2048;
+        }
+    }
+    // Update initializeLLM to use device lost handler
     private async initializeLLM(): Promise<void> {
         try {
             if (!navigator.gpu) {
@@ -156,11 +443,9 @@ export class LLMManager {
             const { FilesetResolver, LlmInference } = window.genaiModule;
             const genaiPath = chrome.runtime.getURL('libs');
             
-            const [adapter, genai, modelBlobUrl] = await Promise.all([
-                navigator.gpu.requestAdapter({ powerPreference: 'high-performance' }),
-                FilesetResolver.forGenAiTasks(genaiPath),
-                this.modelLoader.loadShardedWeights()
-            ]);
+            const adapter = await navigator.gpu.requestAdapter({
+                powerPreference: 'high-performance'
+            });
 
             if (!adapter) throw new Error('No WebGPU adapter found');
 
@@ -177,7 +462,15 @@ export class LLMManager {
                 }
             });
 
-            if (!device) throw new Error('Failed to create WebGPU device');
+            if (!this.device) throw new Error('Failed to create WebGPU device');
+
+            // Set up device lost handler
+            this.setupDeviceLostHandler(this.device);
+
+            const [genai, modelBlobUrl] = await Promise.all([
+                FilesetResolver.forGenAiTasks(genaiPath),
+                this.modelLoader?.loadShardedWeights() ?? Promise.reject(new Error('ModelLoader is null'))
+            ]);
 
             this.llmInference = await LlmInference.createFromOptions(genai, {
                 baseOptions: {
@@ -219,74 +512,56 @@ export class LLMManager {
             if (window.gc) window.gc();
             
         } catch (error) {
-            if (error instanceof Error) {
-                console.error(`Initialization error: ${error.message}`, error);
-            } else {
-                console.error('Initialization error:', error);
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            throw new Error(`LLM initialization failed: ${errorMessage}`);
+        }
+    }
+   
+
+
+    private async reinitializeDevice(): Promise<void> {
+        try {
+            const adapter = await navigator.gpu.requestAdapter({
+                powerPreference: 'high-performance'
+            });
+            
+            if (!adapter) throw new Error('No WebGPU adapter found');
+    
+            this.device = await adapter.requestDevice({
+                requiredLimits: {
+                    maxBindGroups: 4,
+                    maxBindingsPerBindGroup: 8,
+                    maxBufferSize: 256 * 1024 * 1024,
+                    maxComputeInvocationsPerWorkgroup: 256, // Increased for better performance
+                    maxComputeWorkgroupSizeX: 256,
+                    maxComputeWorkgroupSizeY: 256,
+                    maxComputeWorkgroupsPerDimension: 65536,
+                    maxStorageBufferBindingSize: 256 * 1024 * 1024
+                }
+            });
+    
+            if (this.device) {
+                // Set up device lost handler with recovery
+                this.device.lost.then(async (info) => {
+                    console.warn('WebGPU device lost:', info);
+                    this.isDeviceLost = true;
+                    this.device = null;
+                    
+                    // Attempt recovery
+                    try {
+                        await this.reinitializeDevice();
+                        this.isDeviceLost = false;
+                    } catch (error) {
+                        console.error('Failed to recover device:', error);
+                    }
+                });
             }
+        } catch (error) {
+            console.error('Device reinitialization failed:', error);
             throw error;
         }
     }
 
-    public async safeInitialize(): Promise<void> {
-        const memoryMonitor = setInterval(() => {
-            if ((window.performance as Performance)?.memory) {
-                const memory = (window.performance as Performance).memory;
-            }
-        }, 5000);
+   
 
-        try {
-            await this.initializeLLM();
-        } catch (error) {
-            if (this.initRetryCount < this.MAX_RETRIES) {
-                this.initRetryCount++;    
-                if (window.gc) window.gc();
-                await new Promise(resolve => setTimeout(resolve, 2000 * this.initRetryCount));
-                await this.safeInitialize();
-            } else {
-                throw error;
-            }
-        } finally {
-            clearInterval(memoryMonitor);
-        }
     }
-    
-    async streamResponse(
-        prompt: string,
-        onUpdate: (text: string, isComplete: boolean) => void,
-        onError?: (error: Error) => void
-      ): Promise<void> {
-        this.streamController = new AbortController();
-        const signal = this.streamController.signal;
-        
-        let buffer = '';
-        const CHUNK_SIZE = 512; // Configurable chunk size
-        
-        try {
-          await this.llmInference.generateResponse(
-            prompt,
-            (chunk: string, isDone: boolean) => {
-              if (signal.aborted) return;
-              
-              buffer += chunk;
-              
-              // Stream chunks or when response is complete
-              if (buffer.length >= CHUNK_SIZE || isDone) {
-                onUpdate(buffer, isDone);
-                buffer = isDone ? '' : buffer;
-              }
-            }
-          );
-        } catch (error) {
-          if (!signal.aborted) {
-            onError?.(error instanceof Error ? error : new Error(String(error)));
-          }
-        } finally {
-          this.streamController = null;
-        }
-      }
-    
-      cancelStream(): void {
-        this.streamController?.abort();
-      }
-}

@@ -6,13 +6,111 @@ export class LinkManager {
     private llmManager: LLMManager;
     private onStatusUpdate: (message: string, isLoading?: boolean) => void;
     private currentRequestId: number | null = null;
-
+    private readonly MAX_LINKS_PER_BATCH = 5; // Process fewer links at a time
+    private readonly MAX_CONTEXT_LENGTH = 500; // Limit context size
     constructor(llmManager: LLMManager, statusCallback: (message: string, isLoading?: boolean) => void) {
         this.llmManager = llmManager;
         this.onStatusUpdate = statusCallback;
     }
 
+    public async rankLinks(links: Link[], requestId: number): Promise<Link[]> {
+        const filteredLinks = links.filter(link => !this.isUnwantedLink(link));
+        
+        // Process links in smaller batches to stay within token limits
+        const allRankedIds: number[] = [];
+        for (let i = 0; i < filteredLinks.length; i += this.MAX_LINKS_PER_BATCH) {
+            const batch = filteredLinks.slice(i, i + this.MAX_LINKS_PER_BATCH);
+            const rankedIds = await this.getLLMRanking(batch, requestId);
+            allRankedIds.push(...rankedIds);
+            
+            // Update UI with partial results
+            const partialResults = this.updateLinksWithRanking(
+                filteredLinks, 
+                allRankedIds, 
+                requestId
+            );
+            await this.sendPartialUpdate(partialResults, requestId);
+        }
 
+        return this.updateLinksWithRanking(filteredLinks, allRankedIds, requestId);
+    }
+
+    private async getLLMRanking(links: Link[], requestId: number): Promise<number[]> {
+        this.currentRequestId = requestId;
+        const prompt = this.buildRankingPrompt(links);
+        const rankings = new Map<number, number>();
+        let fullResponse = '';
+
+        return new Promise((resolve, reject) => {
+            this.llmManager.streamResponse(
+                prompt,
+                (partial, isDone) => {
+                    if (requestId !== this.currentRequestId) return;
+                    
+                    fullResponse += partial;
+                    this.processRankingResponse(fullResponse, links, rankings, requestId);
+                    
+                    if (isDone) {
+                        resolve(this.getFinalRanking(rankings, links));
+                    }
+                },
+                (error) => {
+                    console.error('Ranking error:', error);
+                    resolve(this.getFallbackRanking(links));
+                }
+            );
+        });
+    }
+
+    private buildRankingPrompt(links: Link[]): string {
+        const linkDescriptions = links.map(link => {
+            // Limit context length to stay within token budget
+            const context = link.context.surrounding.slice(0, this.MAX_CONTEXT_LENGTH);
+            const location = link.context.isInHeading ? '[heading]' : 
+                           link.context.isInMain ? '[main]' : '';
+            return `ID:${link.id}\nTitle: ${this.sanitizeTitle(link.text)} ${location}\nContext: ${context}\n`;
+        }).join('\n');
+
+        return `Rank these ${links.length} links by relevance and importance (1-10).
+Focus on content value and ignore promotional or duplicate content.
+Respond with ID:RANK for each link (e.g. "5:9").
+
+Links to analyze:
+${linkDescriptions}
+
+Start ranking now, one link at a time.`;
+    }
+
+    private processRankingResponse(response: string, links: Link[], rankings: Map<number, number>, requestId: number): void {
+        // Look for complete ranking patterns
+        const rankingPattern = /(\d+):(\d+)/g;
+        const matches = [...response.matchAll(rankingPattern)];
+        
+        for (const match of matches) {
+            const id = parseInt(match[1]);
+            const rank = parseInt(match[2]);
+            
+            if (this.isValidRanking(id, rank, links.length) && !rankings.has(id)) {
+                rankings.set(id, rank);
+                this.updateLinkScore(links, id, rank, requestId);
+            }
+        }
+    }
+
+    private updateLinksWithRanking(links: Link[], rankedIds: number[], requestId: number): Link[] {
+        const sortedLinks = rankedIds
+            .map(id => {
+                const link = links.find(l => l.id === id);
+                if (link) {
+                    link.score = 1 - (rankedIds.indexOf(id) / rankedIds.length);
+                    this.onStatusUpdate(`Ranked: ${link.text.slice(0, 30)}...`, true);
+                }
+                return link;
+            })
+            .filter((link): link is Link => !!link);
+
+        return sortedLinks;
+    }
     private async sendPartialUpdate(links: Link[], requestId: number): Promise<void> {
         chrome.runtime.sendMessage({
             type: 'PARTIAL_LINKS_UPDATE',
@@ -22,80 +120,7 @@ export class LinkManager {
     }
 
 
-    private updateLinksWithRanking(links: Link[], rankedIds: number[], requestId: number): Link[] {
-        const sortedLinks = rankedIds.map(id => {
-            const link = links.find(l => l.id === id);
-            if (link) {
-                link.score = 1 - (rankedIds.indexOf(id) / rankedIds.length);
-                this.onStatusUpdate(`Ranked link: ${link.text.slice(0, 30)}...`, true);
-            }
-            return link;
-        }).filter((link): link is Link => !!link);
-
-        this.sendPartialUpdate(sortedLinks, requestId);
-        return sortedLinks;
-    }
-
-
-    public async rankLinks(links: Link[], requestId: number): Promise<Link[]> {
-        const filteredLinks = links.filter(link => !this.isUnwantedLink(link));
-        const rankedIds = await this.getLLMRanking(filteredLinks, requestId);
-        return this.updateLinksWithRanking(filteredLinks, rankedIds, requestId);
-    }
-
-
-    private async getLLMRanking(links: Link[], requestId: number): Promise<number[]> {
-        this.currentRequestId = requestId;
-        const prompt = this.buildRankingPrompt(links);
-        const rankings = new Map<number, number>();
-        let currentPartialResponse = '';
-        return new Promise((resolve) => {
-            this.llmManager.streamResponse(prompt, (partial) => {
-                if (requestId !== this.currentRequestId) return;
-                currentPartialResponse += partial;
-                this.processRankingResponse(currentPartialResponse, links, rankings, requestId);
-                currentPartialResponse = currentPartialResponse.split('\n').pop() || '';
-            }).then(() => {
-                resolve(this.getFinalRanking(rankings, links));
-            }).catch(() => {
-                resolve(this.getFallbackRanking(links));
-            });
-        });
-    }
-
-
-    private buildRankingPrompt(links: Link[]): string {
-        return `Rank only the most relevant, content-rich links by importance (1-10).
-Skip any promotional, sponsored, or duplicate content.
-Links to rank:
-${links.slice(0, 10).map(link => {
-    const context = link.context.surrounding.slice(0, 100);
-    const location = link.context.isInHeading ? '[heading]' : 
-                    link.context.isInMain ? '[main]' : '';
-    return `${link.id}: ${this.sanitizeTitle(link.text)} ${location}\nContext: ${context}\n`;
-}).join('\n')}
-Return each ranking immediately as: ID:RANK (e.g. "5:9")`;
-    }
-
-
-    private processRankingResponse(response: string, links: Link[], rankings: Map<number, number>, requestId: number): void {
-        const patterns = [
-            /(\d+):(\d+)/g,
-            /ID[:\s]+(\d+)[:\s]+(\d+)/g,
-            /^(\d+)[\s,]+(\d+)$/gm
-        ];
-        for (const pattern of patterns) {
-            const matches = response.matchAll(pattern);
-            for (const match of matches) {
-                const id = parseInt(match[1]);
-                const rank = parseInt(match[2]);
-                if (this.isValidRanking(id, rank, links.length) && !rankings.has(id)) {
-                    rankings.set(id, rank);
-                    this.updateLinkScore(links, id, rank, requestId);
-                }
-            }
-        }
-    }
+   
 
 
     private updateLinkScore(links: Link[], id: number, rank: number, requestId: number): void {
