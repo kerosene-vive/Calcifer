@@ -2,9 +2,43 @@ import { LLMManager } from './llmManager';
 import { Link } from './types';
 import { LLMResponseHandler } from './llmResponseHandler';
 
+interface ClickableElement {
+    id: number;
+    text: string;
+    href?: string;
+    type: 'link' | 'button';
+    context: {
+        surrounding: string;
+        isInHeading: boolean;
+        isInNav: boolean;
+        isInMain: boolean;
+        isSearchResult?: boolean;
+        isVideoLink?: boolean;
+        isWikiLink?: boolean;
+        position: {
+            top: number;
+            isVisible: boolean;
+            width?: number;
+            height?: number;
+            centerScore?: number;
+            areaScore?: number;
+            titleScore?: number;
+            urlScore?: number;
+        }
+    };
+    score: number;
+}
+
 export class LinkManager {
     private llmResponseHandler: LLMResponseHandler;
+    private readonly MAX_ELEMENTS = 10;
     private readonly MAX_CONTEXT_LENGTH = 500;
+    private readonly CENTER_WEIGHT = 0.4;
+    private readonly AREA_WEIGHT = 0.3;
+    private readonly URL_LENGTH_WEIGHT = 0.2;
+    private readonly VISIBILITY_WEIGHT = 0.1;
+    private readonly MAX_URL_LENGTH = 130;
+    private readonly MIN_TEXT_LENGTH = 2;
 
     constructor(llmManager: LLMManager, statusCallback: (message: string, isLoading?: boolean) => void) {
         this.llmResponseHandler = new LLMResponseHandler(llmManager, statusCallback);
@@ -29,7 +63,6 @@ export class LinkManager {
                 func: () => {
                     const getContextInfo = (link: HTMLAnchorElement) => {
                         const rect = link.getBoundingClientRect();
-                        const parent = link.parentElement;
                         const pageType = determinePageType();
                         
                         return {
@@ -42,7 +75,12 @@ export class LinkManager {
                             isWikiLink: pageType === 'wikipedia' && isWikipediaArticleLink(link),
                             position: {
                                 top: Math.round(rect.top),
-                                isVisible: rect.top < window.innerHeight && rect.bottom > 0
+                                isVisible: rect.top < window.innerHeight && rect.bottom > 0,
+                                width: rect.width,
+                                height: rect.height,
+                                centerScore: calculateCenterScore(rect),
+                                areaScore: calculateAreaScore(rect),
+                                urlScore: calculateUrlScore(link.href)
                             }
                         };
                     };
@@ -86,66 +124,128 @@ export class LinkManager {
 
                     const isSearchResult = (link: HTMLAnchorElement): boolean => {
                         return !!(
-                            link.closest('.g') || // Google search result container
-                            link.closest('[data-header-feature]') || // Featured snippet
-                            link.closest('[data-hveid]') // Standard search result
+                            link.closest('.g') ||
+                            link.closest('[data-header-feature]') ||
+                            link.closest('[data-hveid]')
                         );
                     };
 
                     const isYouTubeVideo = (link: HTMLAnchorElement): boolean => {
                         return !!(
-                            link.href.includes('/watch?v=') || // Video page
-                            link.closest('ytd-video-renderer') || // Video in search/home
-                            link.closest('ytd-grid-video-renderer') // Video in channel/playlist
+                            link.href.includes('/watch?v=') ||
+                            link.closest('ytd-video-renderer') ||
+                            link.closest('ytd-grid-video-renderer')
                         );
                     };
 
                     const isWikipediaArticleLink = (link: HTMLAnchorElement): boolean => {
                         return !!(
-                            link.href.match(/\/wiki\/[^:]+$/) && // Wiki article URL pattern
-                            !link.closest('.navbox, .sidebar, .infobox') && // Exclude navigation elements
-                            !link.href.includes('Special:') && // Exclude special pages
-                            !link.href.includes('Talk:') // Exclude talk pages
+                            link.href.match(/\/wiki\/[^:]+$/) &&
+                            !link.closest('.navbox, .sidebar, .infobox') &&
+                            !link.href.includes('Special:') &&
+                            !link.href.includes('Talk:')
                         );
                     };
 
-                    const links = Array.from(document.getElementsByTagName('a'))
-                        .filter(link => {
+                    const calculateCenterScore = (rect: DOMRect): number => {
+                        const viewportHeight = window.innerHeight;
+                        const viewportWidth = window.innerWidth;
+                        const viewportCenterY = viewportHeight / 2;
+                        const viewportCenterX = viewportWidth / 2;
+                        
+                        const elementCenterY = rect.top + (rect.height / 2);
+                        const elementCenterX = rect.left + (rect.width / 2);
+                        
+                        const distanceY = Math.abs(viewportCenterY - elementCenterY) / (viewportHeight / 2);
+                        const distanceX = Math.abs(viewportCenterX - elementCenterX) / (viewportWidth / 2);
+                        
+                        return 1 - (Math.sqrt(distanceX * distanceX + distanceY * distanceY) / Math.sqrt(2));
+                    };
+
+                    const calculateAreaScore = (rect: DOMRect): number => {
+                        const area = rect.width * rect.height;
+                        const optimalArea = 4000;
+                        const maxArea = 90000;
+                        
+                        if (area <= optimalArea) {
+                            return area / optimalArea;
+                        } else {
+                            return Math.max(0, 1 - ((area - optimalArea) / (maxArea - optimalArea)));
+                        }
+                    };
+
+                    const calculateUrlScore = (url: string): number => {
+                        if (!url) return 0;
+                        const maxDesiredLength = 50;
+                        return Math.max(0, 1 - (url.length / maxDesiredLength));
+                    };
+
+                    const findClickableElements = () => {
+                        const selector = `
+                            a,
+                            button,
+                            [role="button"],
+                            [type="button"],
+                            [type="submit"],
+                            [onclick],
+                            [class*="btn"],
+                            [class*="button"],
+                            input[type="button"],
+                            input[type="submit"]
+                        `;
+                        
+                        return Array.from(document.querySelectorAll(selector))
+                            .filter((element): element is HTMLElement => 
+                                element instanceof HTMLElement &&
+                                getComputedStyle(element).display !== 'none' &&
+                                getComputedStyle(element).visibility !== 'hidden' &&
+                                element.offsetParent !== null);
+                    };
+
+                    // Process all clickable elements
+                    const elements = findClickableElements()
+                        .map((element, id) => {
                             try {
-                                const rect = link.getBoundingClientRect();
-                                return link.href && 
-                                       link.href.startsWith('http') && 
-                                       !link.href.includes('#') &&
-                                       rect.width > 0 && 
-                                       rect.height > 0;
+                                if (element instanceof HTMLAnchorElement) {
+                                    const rect = element.getBoundingClientRect();
+                                    if (!element.href || 
+                                        !element.href.startsWith('http') || 
+                                        element.href.includes('#') ||
+                                        rect.width === 0 || 
+                                        rect.height === 0) {
+                                        return null;
+                                    }
+                                    return {
+                                        id,
+                                        text: (element.textContent || '').trim(),
+                                        href: element.href,
+                                        context: getContextInfo(element),
+                                        score: 0
+                                    };
+                                }
+                                return null;
                             } catch {
-                                return false;
+                                return null;
                             }
                         })
-                        .map((link, id) => ({
-                            id,
-                            text: (link.textContent || '').trim(),
-                            href: link.href,
-                            context: getContextInfo(link),
-                            score: 0
-                        }));
+                        .filter((link): link is Link => 
+                            link !== null && 
+                            link.text.length > 0);
 
                     // Filter and prioritize based on page type
                     const pageType = determinePageType();
-                    let filteredLinks = links;
+                    let filteredLinks = elements;
                     
                     if (pageType === 'search') {
-                        filteredLinks = links.filter(link => link.context.isSearchResult);
+                        filteredLinks = elements.filter(link => link.context.isSearchResult);
                     } else if (pageType === 'youtube') {
-                        filteredLinks = links.filter(link => link.context.isVideoLink);
+                        filteredLinks = elements.filter(link => link.context.isVideoLink);
                     } else if (pageType === 'wikipedia') {
-                        filteredLinks = links.filter(link => link.context.isWikiLink);
+                        filteredLinks = elements.filter(link => link.context.isWikiLink);
                     }
 
                     return {
-                        links: filteredLinks
-                            .filter(link => link.text.length > 0)
-                            .slice(0, 30)
+                        links: filteredLinks.slice(0, 30)
                     };
                 }
             });
@@ -156,6 +256,15 @@ export class LinkManager {
         }
     }
 
+    public async fetchClickableElements(tabId: number): Promise<{elements: Array<ClickableElement>}> {
+        const linkResult = await this.fetchPageContent(tabId);
+        const links = linkResult.links.map(link => ({
+            ...link,
+            type: 'link' as const,
+        }));
+        return { elements: links as ClickableElement[] };
+    }
+
     private filterLinks(links: Link[]): Link[] {
         return links.filter(link => !this.isUnwantedLink(link));
     }
@@ -164,7 +273,6 @@ export class LinkManager {
         const text = (link.text || '').toLowerCase();
         const href = (link.href || '').toLowerCase();
         
-        // Common patterns for unwanted links
         const unwantedPatterns = {
             ads: /\b(ad|ads|advert|sponsor|promotion|banner)\b/i,
             prices: /\b(€|£|\$)\s*\d+/,
@@ -177,26 +285,48 @@ export class LinkManager {
             engagement: /\b\d+[KkMm]?\s*(views?|subscribers?|followers?)\b/i
         };
 
-        // Check text length
         if (text.length > 150 || text.length < 3) return true;
         if (href.length > 130) return true;
-        // Check patterns
+        
         for (const pattern of Object.values(unwantedPatterns)) {
             if (text.match(pattern) || href.match(pattern)) return true;
         }
 
-        // Context-based filtering
         if (link.context) {
-            // Filter out pure navigation links unless they're in main content
             if (link.context.isInNav && !link.context.isInMain) return true;
             
-            // Keep search results, video links, and wiki articles regardless of other filters
             if (link.context.isSearchResult || 
                 link.context.isVideoLink || 
                 link.context.isWikiLink) return false;
         }
 
         return false;
+    }
+
+    private rankElements(elements: ClickableElement[]): ClickableElement[] {
+        return elements
+            .map(element => {
+                const centerScore = (element.context.position.centerScore || 0) * this.CENTER_WEIGHT;
+                const areaScore = (element.context.position.areaScore || 0) * this.AREA_WEIGHT;
+                const urlScore = (element.context.position.urlScore || 1) * this.URL_LENGTH_WEIGHT;
+                const visibilityScore = (element.context.position.isVisible ? 1 : 0) * this.VISIBILITY_WEIGHT;
+                
+                const score = centerScore + areaScore + urlScore + visibilityScore;
+                
+                return {
+                    ...element,
+                    score
+                };
+            })
+            .sort((a, b) => b.score - a.score)
+            .slice(0, this.MAX_ELEMENTS);
+    }
+
+    public async processElements(elements: ClickableElement[], requestId: number): Promise<ClickableElement[]> {
+        const filteredElements = elements.filter(element => 
+            element.type === 'link' ? !this.isUnwantedLink(element as Link) : true
+        );
+        return this.llmResponseHandler.rankElements(this.rankElements(filteredElements), requestId);
     }
 
     public sanitizeTitle(text: string): string {
