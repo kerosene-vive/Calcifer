@@ -57,64 +57,124 @@ export class LinkManager {
                     const extractBestTitle = (element: HTMLElement): string => {
                         const candidates: string[] = [];
                         
-                        // Check ARIA attributes
-                        const ariaLabel = element.getAttribute('aria-label');
-                        if (ariaLabel && !ariaLabel.includes('now playing') && !ariaLabel.includes('Play')) {
-                            candidates.push(ariaLabel);
-                        }
-                        
-                        // Check title attribute
-                        if (element.title && !element.title.includes('now playing') && !element.title.includes('Play')) {
-                            candidates.push(element.title);
-                        }
-                        
                         // Special handling for YouTube
                         if (window.location.hostname.includes('youtube.com')) {
-                            const videoTitle = element.querySelector('#video-title, .title, [id*="video-title"]');
-                            if (videoTitle) {
-                                const title = videoTitle.textContent?.trim();
-                                if (title && !title.includes('now playing')) {
-                                    candidates.push(title);
+                            // Try to get the most reliable title elements first
+                            const videoTitle = element.querySelector('#video-title')?.textContent?.trim();
+                            if (videoTitle && !videoTitle.toLowerCase().includes('now playing')) {
+                                candidates.push(videoTitle);
+                            }
+                    
+                            // Check for title in video renderer
+                            const rendererTitle = element.closest('ytd-video-renderer')?.querySelector('#video-title')?.textContent?.trim();
+                            if (rendererTitle && !rendererTitle.toLowerCase().includes('now playing')) {
+                                candidates.push(rendererTitle);
+                            }
+                    
+                            // Check for title in grid renderer
+                            const gridTitle = element.closest('ytd-grid-video-renderer')?.querySelector('#video-title')?.textContent?.trim();
+                            if (gridTitle && !gridTitle.toLowerCase().includes('now playing')) {
+                                candidates.push(gridTitle);
+                            }
+                    
+                            // Try to get the title from the aria-label (often contains the full title)
+                            const ariaLabel = element.getAttribute('aria-label');
+                            if (ariaLabel) {
+                                // Remove "now playing" and duration info from aria-label
+                                const cleanedLabel = ariaLabel
+                                    .replace(/now playing/i, '')
+                                    .replace(/\d+:\d+$/, '')
+                                    .replace(/^by .+? \d+ (minutes?|hours?|days?) ago/, '')
+                                    .trim();
+                                if (cleanedLabel.length > 0) {
+                                    candidates.push(cleanedLabel);
                                 }
                             }
-                            
-                            const ytTitle = element.closest('[id*="video-title"]')?.textContent?.trim();
-                            if (ytTitle) candidates.push(ytTitle);
-                            
+                    
+                            // Check for the metadata title
                             const metaTitle = document.querySelector('meta[property="og:title"]')?.getAttribute('content');
-                            if (metaTitle && element instanceof HTMLAnchorElement && element.href?.includes(metaTitle)) {
+                            if (metaTitle && element.href?.includes(metaTitle)) {
                                 candidates.push(metaTitle);
                             }
+                    
+                            // Get text content but filter out unwanted patterns
+                            const textContent = element.textContent?.trim();
+                            if (textContent && !textContent.toLowerCase().includes('now playing')) {
+                                candidates.push(textContent);
+                            }
                         }
-                        
-                        // Get immediate text content
-                        const directText = Array.from(element.childNodes)
-                            .filter(node => node.nodeType === Node.TEXT_NODE)
-                            .map(node => node.textContent?.trim())
-                            .filter(text => text && 
-                                   text.length > 0 && 
-                                   !text.includes('now playing') &&
-                                   !text.match(/^\d{2}:\d{2}$/) &&
-                                   !text.match(/^(Play|Pause|Stop|Next|Previous)$/))
-                            .join(' ');
-                        
-                        if (directText) candidates.push(directText);
-                        
-                        // Get text from immediate children
-                        const childText = Array.from(element.children)
-                            .filter(child => 
-                                !child.querySelector('a') &&
-                                !child.matches('.timestamp, .duration, .play-button, .control') &&
-                                !child.className.includes('time') &&
-                                !child.className.includes('duration'))
-                            .map(child => child.textContent?.trim())
-                            .filter(text => text && 
-                                   text.length > 0 && 
-                                   !text.includes('now playing'))
-                            .join(' ');
-                        
-                        if (childText) candidates.push(childText);
-
+                        // Special handling for Google Search
+                        else if (window.location.hostname.includes('google')) {
+                            // Try to get the main heading first
+                            const h3Title = element.closest('.g')?.querySelector('h3')?.textContent?.trim();
+                            if (h3Title) {
+                                candidates.push(h3Title);
+                            }
+                    
+                            // Get the text content of the element itself
+                            const linkText = element.textContent?.trim();
+                            if (linkText) {
+                                // Clean up common Google search result artifacts
+                                const cleanedText = linkText
+                                    .replace(/^https?:\/\/(www\.)?/, '')  // Remove protocol and www
+                                    .replace(/\s*[-›»]\s*.*$/, '')        // Remove everything after arrows/bullets
+                                    .replace(/\s+/g, ' ')                 // Normalize whitespace
+                                    .trim();
+                                
+                                if (cleanedText.length > 0) {
+                                    candidates.push(cleanedText);
+                                }
+                            }
+                    
+                            // Try to get structured data if available
+                            const structuredTitle = element.closest('[data-hveid]')?.querySelector('[data-content-feature]')?.textContent?.trim();
+                            if (structuredTitle) {
+                                candidates.push(structuredTitle);
+                            }
+                        }
+                        // General title extraction for other sites
+                        else {
+                            // Check ARIA attributes
+                            const ariaLabel = element.getAttribute('aria-label');
+                            if (ariaLabel) {
+                                candidates.push(ariaLabel);
+                            }
+                            
+                            // Check title attribute
+                            if (element.title) {
+                                candidates.push(element.title);
+                            }
+                            
+                            // Get immediate text content
+                            const directText = Array.from(element.childNodes)
+                                .filter(node => node.nodeType === Node.TEXT_NODE)
+                                .map(node => node.textContent?.trim())
+                                .filter(text => text && 
+                                       text.length > 0 && 
+                                       !text.match(/^\d{2}:\d{2}$/) &&
+                                       !text.match(/^(Play|Pause|Stop|Next|Previous)$/))
+                                .join(' ');
+                            
+                            if (directText) {
+                                candidates.push(directText);
+                            }
+                            
+                            // Get text from immediate children
+                            const childText = Array.from(element.children)
+                                .filter(child => 
+                                    !child.querySelector('a') &&
+                                    !child.matches('.timestamp, .duration, .play-button, .control') &&
+                                    !child.className.includes('time') &&
+                                    !child.className.includes('duration'))
+                                .map(child => child.textContent?.trim())
+                                .filter(Boolean)
+                                .join(' ');
+                            
+                            if (childText) {
+                                candidates.push(childText);
+                            }
+                        }
+                    
                         // Filter and clean candidates
                         const validCandidates = candidates
                             .filter(text => 
@@ -126,13 +186,25 @@ export class LinkManager {
                                 !text.match(/^\d{1,2}:\d{2}$/) &&
                                 !text.match(/^\d+ (seconds?|minutes?|hours?) ago$/i))
                             .map(text => sanitizeTitle(text));
-
+                    
+                        // Sort candidates by quality
                         return validCandidates
                             .sort((a, b) => {
+                                // Prefer longer titles (but not too long)
+                                const aLength = a.length;
+                                const bLength = b.length;
+                                const optimalLength = 60;
+                                
+                                // Calculate how close each length is to optimal
+                                const aOptimalDiff = Math.abs(aLength - optimalLength);
+                                const bOptimalDiff = Math.abs(bLength - optimalLength);
+                                
+                                // Prefer multi-word titles
                                 const aWords = a.split(/\s+/).length;
                                 const bWords = b.split(/\s+/).length;
+                                
                                 if (aWords !== bWords) return bWords - aWords;
-                                return b.length - a.length;
+                                return aOptimalDiff - bOptimalDiff;
                             })[0] || '';
                     };
 
