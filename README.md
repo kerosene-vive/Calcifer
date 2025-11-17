@@ -1,6 +1,7 @@
 # Calcifer Nano
-
+<img width="128" height="128" alt="icon-128" src="https://github.com/user-attachments/assets/336bfc05-7339-442f-8a8e-0a92bd9992fe" />
 Calcifer is a Chrome extension that dynamically extracts links from the page you are viewing and uses AI to rank them, helping you quickly find what you're looking for without excessive scrolling or searching. **This is a beta version** and is open to improvements.
+
 
 ---
 
