@@ -154,20 +154,14 @@ export class LLMManager {
 
 
     private async setupWebAssembly(): Promise<void> {
-        const script = document.createElement('script');
-        script.type = 'text/javascript';
-        script.textContent = `
-            if (typeof WebAssembly === 'object') {
-                WebAssembly.compileStreaming = WebAssembly.compileStreaming || 
-                    async function(response) {
-                        const buffer = await response.arrayBuffer();
-                        return WebAssembly.compile(buffer);
-                    };
-            }
-        `;
-        document.head.appendChild(script);
+    // Directly patch WebAssembly without inline scripts
+    if (typeof WebAssembly === 'object' && !WebAssembly.compileStreaming) {
+        (WebAssembly as any).compileStreaming = async function(response: Response) {
+            const buffer = await response.arrayBuffer();
+            return WebAssembly.compile(buffer);
+        };
     }
-
+}
 
     private patchWebGPU(): void {
         if (!navigator.gpu) return;
@@ -307,22 +301,7 @@ export class LLMManager {
                 maxTokens: 1000,
                 topK: 3,
                 temperature: 0.8,
-                loraRanks: [4, 8, 16, 32],
-                modelConfig: {
-                    batchSize: 1,
-                    modelDimension: 2048,
-                    hiddenDimension: 12288,
-                    headDimension: 256,
-                    numberOfHeads: 8,
-                    numberOfKVHeads: 1,
-                    vocabularySize: 256128,
-                    stackSize: 32,
-                    attentionMaskType: 1,
-                    postNormFF: true,
-                    postNormAttention: true,
-                    attentionScaleType: 2,
-                    skipAbsolutePositionalEmbeddings: false
-                }
+                loraRanks: [4, 8, 16, 32]
             });
             if (!this.llmInference) {
                 throw new Error('LLM creation returned null');
@@ -401,20 +380,9 @@ export class LLMManager {
             this.llmInference = await LlmInference.createFromOptions(genai, {
                 baseOptions: {
                     modelAssetPath: modelBlobUrl,
-                    delegate: {
-                        gpu: {
-                            modelType: 'F16',
-                            allowPrecisionLoss: true,
-                            enableQuantization: true,
-                            cacheMode: 'AGGRESSIVE',
-                            waitType: 'PASSIVE',
-                            preferCache: true,
-                            optimizationHints: {
-                                enableFastMath: true,
-                                preferSmallBuffers: true,
-                                computeUnit: 'GPU_AND_CPU'
-                            }
-                        }
+                    delegate: "GPU",
+                    gpuOptions: {
+                        device: this.device
                     }
                 },
                 maxTokens: 1000,
@@ -422,10 +390,7 @@ export class LLMManager {
                 temperature: 0.8,
                 randomSeed: 101,
                 loraRanks: [4, 8, 16, 32],
-                computeSettings: {
-                    numThreads: navigator.hardwareConcurrency || 4,
-                    enableMemoryPlanning: true
-                }
+                
             });
 
             if (!this.llmInference) throw new Error('LLM creation returned null');

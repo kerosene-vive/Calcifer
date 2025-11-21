@@ -2,14 +2,14 @@ export interface Link {
     id: number;
     text: string;
     href: string;
-    isSearchResult?: boolean;
-    isVideoLink?: boolean;
-    isWikiLink?: boolean;
     context: {
         surrounding: string;
         isInHeading: boolean;
         isInNav: boolean;
         isInMain: boolean;
+        isSearchResult: boolean;  // Move here
+        isVideoLink: boolean;     // Move here
+        isWikiLink: boolean;      // Move here
         position: {
             top: number;
             isVisible: boolean;

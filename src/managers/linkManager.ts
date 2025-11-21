@@ -93,7 +93,7 @@ export class LinkManager {
                     
                             // Check for the metadata title
                             const metaTitle = document.querySelector('meta[property="og:title"]')?.getAttribute('content');
-                            if (metaTitle && element.href?.includes(metaTitle)) {
+                            if (metaTitle && (element as HTMLAnchorElement).href?.includes(metaTitle))  {
                                 candidates.push(metaTitle);
                             }
                     
@@ -362,7 +362,7 @@ export class LinkManager {
                                 return null;
                             }
                         })
-                        .filter((link): link is Link => 
+                        .filter((link): link is NonNullable<typeof link> => 
                             link !== null && 
                             link.text.length > 0 &&
                             link.href.startsWith('http') &&
@@ -385,7 +385,7 @@ export class LinkManager {
 
                     // Score and sort links
                     filteredLinks = filteredLinks
-                        .filter((link): link is Link => link !== null && link.id !== undefined)
+                        .filter((link): link is NonNullable<typeof link> => link !== null && link.id !== undefined)
                         .map(link => ({
                             ...link,
                             score: (

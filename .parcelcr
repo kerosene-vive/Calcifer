@@ -1,5 +1,5 @@
 {
-  "extends": ["@parcel/config-webextension"],
+  "extends": "@parcel/config-webextension",
   "reporters": ["...", "parcel-reporter-static-files-copy"],
   "transformers": {
     "*.wasm": ["@parcel/transformer-raw"],
